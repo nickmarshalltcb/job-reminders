@@ -138,21 +138,21 @@ exports.handler = async (event, context) => {
                     <table role="presentation" style="width: 100%; border-collapse: collapse;">
                       <tr>
                         <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; width: 45%;">Job Number</td>
-                        <td style="padding: 12px 0; color: #111827; font-size: 18px; font-weight: 700; text-align: right; width: 55%;">${job.jobNumber}</td>
+                        <td style="padding: 12px 0; color: #000000; font-size: 18px; font-weight: 700; text-align: right; width: 55%;">${job.jobNumber}</td>
                       </tr>
                       <tr>
                         <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
                       </tr>
                       <tr>
                         <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Client Name</td>
-                        <td style="padding: 12px 0; color: #111827; font-size: 17px; font-weight: 600; text-align: right;">${job.clientName}</td>
+                        <td style="padding: 12px 0; color: #000000; font-size: 17px; font-weight: 600; text-align: right;">${job.clientName}</td>
                       </tr>
                       <tr>
                         <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
                       </tr>
                       <tr>
                         <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Forwarding Date</td>
-                        <td style="padding: 12px 0; color: #111827; font-size: 16px; font-weight: 500; text-align: right;">${formatDate(job.forwardingDate)}</td>
+                        <td style="padding: 12px 0; color: #000000; font-size: 16px; font-weight: 500; text-align: right;">${formatDate(job.forwardingDate)}</td>
                       </tr>
                       <tr>
                         <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
@@ -186,7 +186,7 @@ exports.handler = async (event, context) => {
               <table role="presentation" class="mobile-full-width" style="width: 100%; border-collapse: collapse; background-color: ${daysRemaining <= 0 ? '#fef2f2' : '#fffbeb'}; border-left: 4px solid ${urgencyColor}; border-radius: 8px; margin-bottom: 28px;">
                 <tr>
                   <td style="padding: 18px 20px;" class="mobile-padding">
-                    <p style="margin: 0; color: #111827; font-size: 15px; line-height: 1.6;" class="mobile-text-small">
+                    <p style="margin: 0; color: #000000; font-size: 15px; line-height: 1.6;" class="mobile-text-small">
                       <strong style="display: block; font-size: 16px; margin-bottom: 6px; color: ${urgencyColor};">⚠️ Action Required</strong>
                       ${daysRemaining < 0 ? 'This job is <strong>overdue</strong>! Please review immediately and update the status.' : 
                         daysRemaining === 0 ? 'This job is <strong>due today</strong>! Please ensure all tasks are completed on time.' : 
@@ -270,7 +270,7 @@ Automated email sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/K
     const mailOptions = {
       from: `"Flycast Marketing Reminders" <${emailConfig.fromEmail}>`,
       to: emailConfig.toEmail,
-      subject: `🔔 Reminder: Job ${job.jobNumber} ${urgencyText} - ${job.clientName}`,
+      subject: `Reminder: ${job.jobNumber} (${job.clientName}) - ${urgencyText}`,
       text: textContent,
       html: htmlContent
     };
