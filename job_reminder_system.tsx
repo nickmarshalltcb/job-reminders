@@ -243,6 +243,7 @@ const JobReminderSystem = () => {
     try {
       // Create a test job
       const testJob = {
+        id: 1,
         jobNumber: 'TEST-001',
         clientName: 'Test Client',
         forwardingDate: new Date().toISOString().split('T')[0],
@@ -733,20 +734,36 @@ const JobReminderSystem = () => {
     if (!isLoading && jobs.length > 0) {
       const hash = window.location.hash;
       if (hash && hash.startsWith('#job-')) {
-        setTimeout(() => {
-          const element = document.querySelector(hash);
-          if (element) {
-            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            // Add a highlight effect
-            element.classList.add('ring-2', 'ring-blue-500', 'ring-opacity-50');
-            setTimeout(() => {
-              element.classList.remove('ring-2', 'ring-blue-500', 'ring-opacity-50');
-            }, 3000);
+        const jobId = parseInt(hash.replace('#job-', ''));
+        
+        // Find the job in the filtered list
+        const jobIndex = filteredJobs.findIndex(job => job.id === jobId);
+        
+        if (jobIndex !== -1) {
+          // Calculate which page the job is on
+          const targetPage = Math.floor(jobIndex / itemsPerPage) + 1;
+          
+          // Navigate to that page first
+          if (currentPage !== targetPage) {
+            setCurrentPage(targetPage);
           }
-        }, 500); // Wait for rendering
+          
+          // Wait for page to render, then scroll
+          setTimeout(() => {
+            const element = document.querySelector(hash);
+            if (element) {
+              element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              // Add a highlight effect
+              element.classList.add('ring-2', 'ring-blue-500', 'ring-opacity-50');
+              setTimeout(() => {
+                element.classList.remove('ring-2', 'ring-blue-500', 'ring-opacity-50');
+              }, 3000);
+            }
+          }, 500); // Wait for rendering
+        }
       }
     }
-  }, [isLoading, jobs]);
+  }, [isLoading, jobs, filteredJobs, itemsPerPage, currentPage]);
 
   if (isLoading) {
     return (
