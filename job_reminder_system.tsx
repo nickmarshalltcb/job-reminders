@@ -729,41 +729,21 @@ const JobReminderSystem = () => {
     setCurrentPage(1);
   }, [searchTerm, filterStatus, sortConfig]);
 
-  // Scroll to job if URL has hash (for email links)
+  // Check for job number query parameter and populate search bar
   useEffect(() => {
     if (!isLoading && jobs.length > 0) {
-      const hash = window.location.hash;
-      if (hash && hash.startsWith('#job-')) {
-        const jobId = parseInt(hash.replace('#job-', ''));
+      const urlParams = new URLSearchParams(window.location.search);
+      const jobNumber = urlParams.get('job');
+      
+      if (jobNumber && searchTerm === '') {
+        // Set the search term to the job number from URL
+        setSearchTerm(jobNumber);
         
-        // Find the job in the filtered list
-        const jobIndex = filteredJobs.findIndex(job => job.id === jobId);
-        
-        if (jobIndex !== -1) {
-          // Calculate which page the job is on
-          const targetPage = Math.floor(jobIndex / itemsPerPage) + 1;
-          
-          // Navigate to that page first
-          if (currentPage !== targetPage) {
-            setCurrentPage(targetPage);
-          }
-          
-          // Wait for page to render, then scroll
-          setTimeout(() => {
-            const element = document.querySelector(hash);
-            if (element) {
-              element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              // Add a highlight effect
-              element.classList.add('ring-2', 'ring-blue-500', 'ring-opacity-50');
-              setTimeout(() => {
-                element.classList.remove('ring-2', 'ring-blue-500', 'ring-opacity-50');
-              }, 3000);
-            }
-          }, 500); // Wait for rendering
-        }
+        // Clear the query parameter from URL after using it
+        window.history.replaceState(null, '', window.location.pathname);
       }
     }
-  }, [isLoading, jobs, filteredJobs, itemsPerPage, currentPage]);
+  }, [isLoading, jobs, searchTerm]);
 
   if (isLoading) {
     return (

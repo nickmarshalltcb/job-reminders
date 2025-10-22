@@ -200,7 +200,7 @@ exports.handler = async (event, context) => {
               <table role="presentation" style="width: 100%; border-collapse: collapse;">
                 <tr>
                   <td align="center" style="padding: 10px 0;">
-                    <a href="${process.env.URL || 'https://your-app.netlify.app'}#job-${job.id}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4); transition: all 0.2s;" class="mobile-button">
+                    <a href="${process.env.URL || 'https://your-app.netlify.app'}?job=${encodeURIComponent(job.jobNumber)}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4); transition: all 0.2s;" class="mobile-button">
                       View Dashboard →
                     </a>
                   </td>
@@ -228,7 +228,7 @@ exports.handler = async (event, context) => {
             <td align="center" style="padding: 0 20px;">
               <p style="margin: 0; color: #9ca3af; font-size: 11px; line-height: 1.5;">
                 If you cannot view the dashboard button above, copy and paste this link: <br>
-                <span style="color: #6b7280;">${process.env.URL || 'https://your-app.netlify.app'}#job-${job.id}</span>
+                <span style="color: #6b7280;">${process.env.URL || 'https://your-app.netlify.app'}?job=${encodeURIComponent(job.jobNumber)}</span>
               </p>
             </td>
           </tr>
