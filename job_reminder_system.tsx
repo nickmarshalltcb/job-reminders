@@ -239,6 +239,8 @@ const JobReminderSystem = () => {
       return;
     }
 
+    showAlert('Sending test email...', 'success');
+
     try {
       // Create a test job
       const testJob = {
@@ -248,6 +250,10 @@ const JobReminderSystem = () => {
         productionDeadline: new Date().toISOString().split('T')[0],
         status: 'In Production'
       };
+
+      console.log('🔵 Attempting to send test email...');
+      console.log('📧 To:', emailConfig.toEmail);
+      console.log('📤 From:', emailConfig.fromEmail);
 
       const response = await fetch('/.netlify/functions/send-reminder', {
         method: 'POST',
@@ -260,14 +266,21 @@ const JobReminderSystem = () => {
         })
       });
 
+      console.log('📡 Response status:', response.status);
+
       if (!response.ok) {
-        throw new Error('Failed to send test email');
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('❌ Error response:', errorData);
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to send test email`);
       }
+
+      const data = await response.json();
+      console.log('✅ Success response:', data);
 
       showAlert('Test email sent successfully! Check your inbox.', 'success');
     } catch (error) {
-      console.error('Error sending test email:', error);
-      showAlert('Failed to send test email. Please check your email configuration.', 'error');
+      console.error('❌ Error sending test email:', error);
+      showAlert(`Failed to send test email: ${error.message}`, 'error');
     }
   };
 
