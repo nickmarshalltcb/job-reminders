@@ -692,11 +692,25 @@ const JobReminderSystem = () => {
         return sortConfig.direction === 'asc' ? 1 : -1;
       }
       
-      // Secondary sort: fallback to job number
+      // Secondary sort: fallback to job number (descending - higher numbers first)
+      // Extract numeric part from job numbers for proper numeric sorting
+      const extractNumber = (jobNum: string) => {
+        const match = jobNum.match(/\d+/);
+        return match ? parseInt(match[0], 10) : 0;
+      };
+      
+      const aNum = extractNumber(a.jobNumber);
+      const bNum = extractNumber(b.jobNumber);
+      
+      // Sort descending (higher numbers first)
+      if (aNum > bNum) return -1;
+      if (aNum < bNum) return 1;
+      
+      // If numbers are equal, sort by full job number alphabetically
       const aJobNum = a.jobNumber.toLowerCase();
       const bJobNum = b.jobNumber.toLowerCase();
-      if (aJobNum < bJobNum) return -1;
-      if (aJobNum > bJobNum) return 1;
+      if (aJobNum < bJobNum) return 1;
+      if (aJobNum > bJobNum) return -1;
       return 0;
     });
   };
