@@ -20,6 +20,15 @@ exports.handler = async (event, context) => {
       };
     }
 
+    // Helper function to format dates as dd-mmm-yyyy
+    const formatDate = (dateString) => {
+      const date = new Date(dateString + 'T00:00:00');
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = date.toLocaleDateString('en-US', { month: 'short' });
+      const year = date.getFullYear();
+      return `${day}-${month}-${year}`;
+    };
+
     // Create transporter using Gmail
     const transporter = nodemailer.createTransport({
       service: 'gmail',
@@ -143,14 +152,14 @@ exports.handler = async (event, context) => {
                       </tr>
                       <tr>
                         <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Forwarding Date</td>
-                        <td style="padding: 12px 0; color: #111827; font-size: 16px; font-weight: 500; text-align: right;">${new Date(job.forwardingDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</td>
+                        <td style="padding: 12px 0; color: #111827; font-size: 16px; font-weight: 500; text-align: right;">${formatDate(job.forwardingDate)}</td>
                       </tr>
                       <tr>
                         <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
                       </tr>
                       <tr>
                         <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Production Deadline</td>
-                        <td style="padding: 12px 0; color: ${urgencyColor}; font-size: 17px; font-weight: 700; text-align: right;">${new Date(job.productionDeadline).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</td>
+                        <td style="padding: 12px 0; color: ${urgencyColor}; font-size: 17px; font-weight: 700; text-align: right;">${formatDate(job.productionDeadline)}</td>
                       </tr>
                       <tr>
                         <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
@@ -191,7 +200,7 @@ exports.handler = async (event, context) => {
               <table role="presentation" style="width: 100%; border-collapse: collapse;">
                 <tr>
                   <td align="center" style="padding: 10px 0;">
-                    <a href="${process.env.URL || 'https://your-app.netlify.app'}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4); transition: all 0.2s;" class="mobile-button">
+                    <a href="${process.env.URL || 'https://your-app.netlify.app'}#job-${job.id}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4); transition: all 0.2s;" class="mobile-button">
                       View Dashboard →
                     </a>
                   </td>
@@ -219,7 +228,7 @@ exports.handler = async (event, context) => {
             <td align="center" style="padding: 0 20px;">
               <p style="margin: 0; color: #9ca3af; font-size: 11px; line-height: 1.5;">
                 If you cannot view the dashboard button above, copy and paste this link: <br>
-                <span style="color: #6b7280;">${process.env.URL || 'https://your-app.netlify.app'}</span>
+                <span style="color: #6b7280;">${process.env.URL || 'https://your-app.netlify.app'}#job-${job.id}</span>
               </p>
             </td>
           </tr>
@@ -241,8 +250,8 @@ Job Details:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Job Number: ${job.jobNumber}
 • Client: ${job.clientName}
-• Forwarding Date: ${job.forwardingDate}
-• Production Deadline: ${job.productionDeadline}
+• Forwarding Date: ${formatDate(job.forwardingDate)}
+• Production Deadline: ${formatDate(job.productionDeadline)}
 • Status: ${job.status}
 • Days Remaining: ${daysRemaining < 0 ? 'OVERDUE' : daysRemaining === 0 ? 'TODAY' : daysRemaining + ' days'}
 

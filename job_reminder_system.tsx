@@ -56,7 +56,7 @@ const JobReminderSystem = () => {
   const [inputText, setInputText] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
-  const [sortConfig, setSortConfig] = useState({ key: 'productionDeadline', direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState({ key: 'daysLeft', direction: 'asc' });
   const [emailConfig, setEmailConfig] = useState({
     toEmail: '',
     fromEmail: '',
@@ -634,6 +634,15 @@ const JobReminderSystem = () => {
     return colors[status] || 'bg-slate-600/20 text-slate-400 border border-slate-600/30';
   };
 
+  // Format date as dd-mmm-yyyy (23-Oct-2025)
+  const formatDate = (dateString: string): string => {
+    const date = new Date(dateString + 'T00:00:00');
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = date.toLocaleDateString('en-US', { month: 'short' });
+    const year = date.getFullYear();
+    return `${day}-${month}-${year}`;
+  };
+
   const getDaysUntilDeadline = useCallback((deadline: string, status: string): number | null => {
     if (status === 'Completed') {
       return null;
@@ -675,12 +684,19 @@ const JobReminderSystem = () => {
         bValue = getDaysUntilDeadline(b.productionDeadline, b.status) ?? 999;
       }
 
+      // Primary sort
       if (aValue < bValue) {
         return sortConfig.direction === 'asc' ? -1 : 1;
       }
       if (aValue > bValue) {
         return sortConfig.direction === 'asc' ? 1 : -1;
       }
+      
+      // Secondary sort: fallback to job number
+      const aJobNum = a.jobNumber.toLowerCase();
+      const bJobNum = b.jobNumber.toLowerCase();
+      if (aJobNum < bJobNum) return -1;
+      if (aJobNum > bJobNum) return 1;
       return 0;
     });
   };
@@ -697,6 +713,26 @@ const JobReminderSystem = () => {
   useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm, filterStatus, sortConfig]);
+
+  // Scroll to job if URL has hash (for email links)
+  useEffect(() => {
+    if (!isLoading && jobs.length > 0) {
+      const hash = window.location.hash;
+      if (hash && hash.startsWith('#job-')) {
+        setTimeout(() => {
+          const element = document.querySelector(hash);
+          if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Add a highlight effect
+            element.classList.add('ring-2', 'ring-blue-500', 'ring-opacity-50');
+            setTimeout(() => {
+              element.classList.remove('ring-2', 'ring-blue-500', 'ring-opacity-50');
+            }, 3000);
+          }
+        }, 500); // Wait for rendering
+      }
+    }
+  }, [isLoading, jobs]);
 
   if (isLoading) {
     return (
@@ -1086,17 +1122,19 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                 ) : (
                   paginatedJobs.map((job, index) => {
                     const daysLeft = getDaysUntilDeadline(job.productionDeadline, job.status);
+                    const isCritical = daysLeft !== null && daysLeft <= 0;
                     return (
                       <tr
                         key={job.jobNumber}
-                        className="border-b border-slate-800 hover:bg-slate-800/50 transition-colors"
+                        id={`job-${job.id}`}
+                        className={`border-b border-slate-800 hover:bg-slate-800/50 transition-colors ${isCritical ? 'animate-pulse-red' : ''}`}
                       >
                         <td className="px-6 py-4">
                           <span className="font-semibold text-blue-400">{job.jobNumber}</span>
                         </td>
                         <td className="px-6 py-4 text-slate-200">{job.clientName}</td>
-                        <td className="px-6 py-4 text-slate-300 text-sm">{job.forwardingDate}</td>
-                        <td className="px-6 py-4 text-slate-300 text-sm">{job.productionDeadline}</td>
+                        <td className="px-6 py-4 text-slate-300 text-sm">{formatDate(job.forwardingDate)}</td>
+                        <td className="px-6 py-4 text-slate-300 text-sm">{formatDate(job.productionDeadline)}</td>
                         <td className="px-6 py-4">
                           {daysLeft !== null ? (
                             <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold ${

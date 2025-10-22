@@ -97,6 +97,20 @@
     }
   }
 
+  /* Subtle red pulse for critical jobs */
+  .animate-pulse-red {
+    animation: pulseRed 3s ease-in-out infinite;
+  }
+
+  @keyframes pulseRed {
+    0%, 100% {
+      background-color: rgba(15, 23, 42, 0);
+    }
+    50% {
+      background-color: rgba(239, 68, 68, 0.08);
+    }
+  }
+
   /* Smooth scrollbar styling for dark mode */
   ::-webkit-scrollbar {
     width: 8px;
