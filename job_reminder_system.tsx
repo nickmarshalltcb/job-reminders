@@ -233,6 +233,44 @@ const JobReminderSystem = () => {
     }
   };
 
+  const sendTestEmail = async () => {
+    if (!emailConfig.toEmail || !emailConfig.fromEmail || !emailConfig.fromPassword) {
+      showAlert('Please fill in all email configuration fields first', 'warning');
+      return;
+    }
+
+    try {
+      // Create a test job
+      const testJob = {
+        jobNumber: 'TEST-001',
+        clientName: 'Test Client',
+        forwardingDate: new Date().toISOString().split('T')[0],
+        productionDeadline: new Date().toISOString().split('T')[0],
+        status: 'In Production'
+      };
+
+      const response = await fetch('/.netlify/functions/send-reminder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          job: testJob,
+          emailConfig
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to send test email');
+      }
+
+      showAlert('Test email sent successfully! Check your inbox.', 'success');
+    } catch (error) {
+      console.error('Error sending test email:', error);
+      showAlert('Failed to send test email. Please check your email configuration.', 'error');
+    }
+  };
+
   const checkReminders = async () => {
     const pkTime = getPakistanTime();
     const hour = pkTime.getHours();
@@ -271,6 +309,23 @@ const JobReminderSystem = () => {
     }
 
     try {
+      // Send email via Netlify Function
+      const response = await fetch('/.netlify/functions/send-reminder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          job,
+          emailConfig
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to send email reminder');
+      }
+
+      // Update database to mark reminder as sent
       await supabase
         .from('jobs')
         .update({
@@ -281,8 +336,11 @@ const JobReminderSystem = () => {
         .eq('job_number', job.jobNumber);
 
       await loadJobs();
+      
+      console.log(`✅ Email reminder sent for job ${job.jobNumber}`);
     } catch (error) {
-      console.error('Error updating reminder status:', error);
+      console.error('Error sending email reminder:', error);
+      showAlert('Failed to send email reminder', 'error');
     }
   };
 
@@ -1398,19 +1456,28 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
               </div>
 
               {/* Modal Footer */}
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={saveEmailConfig}
+                    className="flex-1 px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
+                  >
+                    <FaCheckCircle className="w-4 h-4" />
+                    Save Configuration
+                  </button>
+                  <button
+                    onClick={() => setShowSettings(false)}
+                    className="px-6 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition-all duration-200 border border-slate-700"
+                  >
+                    Cancel
+                  </button>
+                </div>
                 <button
-                  onClick={saveEmailConfig}
-                  className="flex-1 px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
+                  onClick={sendTestEmail}
+                  className="w-full px-6 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition-all duration-200 border border-slate-700 flex items-center justify-center gap-2"
                 >
-                  <FaCheckCircle className="w-4 h-4" />
-                  Save Configuration
-                </button>
-                <button
-                  onClick={() => setShowSettings(false)}
-                  className="px-6 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition-all duration-200 border border-slate-700"
-                >
-                  Cancel
+                  <FaBell className="w-4 h-4" />
+                  Send Test Email
                 </button>
               </div>
             </div>
