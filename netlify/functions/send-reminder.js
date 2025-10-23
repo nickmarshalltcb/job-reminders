@@ -65,6 +65,8 @@ exports.handler = async (event, context) => {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
   <title>Job Reminder - ${job.jobNumber}</title>
   <!--[if mso]>
   <style type="text/css">
@@ -72,6 +74,12 @@ exports.handler = async (event, context) => {
   </style>
   <![endif]-->
   <style type="text/css">
+    /* Prevent dark mode color inversion */
+    @media (prefers-color-scheme: dark) {
+      .light-bg { background-color: #ffffff !important; }
+      .dark-text { color: #1f2937 !important; }
+    }
+    
     /* Mobile-first responsive styles */
     @media only screen and (max-width: 600px) {
       .mobile-padding { padding: 20px !important; }
@@ -90,7 +98,7 @@ exports.handler = async (event, context) => {
   <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f3f4f6;">
     <tr>
       <td align="center" style="padding: 40px 20px;" class="mobile-padding">
-        <table role="presentation" class="mobile-full-width" style="max-width: 600px; width: 100%; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);">
+        <table role="presentation" class="mobile-full-width light-bg" style="max-width: 600px; width: 100%; margin: 0 auto; background-color: #ffffff !important; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);">
           
           <!-- Header -->
           <tr>
@@ -132,27 +140,27 @@ exports.handler = async (event, context) => {
               </p>
 
               <!-- Job Details Card -->
-              <table role="presentation" class="mobile-full-width" style="width: 100%; border-collapse: collapse; background: linear-gradient(to bottom, #f9fafb 0%, #ffffff 100%); border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; margin-bottom: 28px;">
+              <table role="presentation" class="mobile-full-width light-bg" style="width: 100%; border-collapse: collapse; background: linear-gradient(to bottom, #f9fafb 0%, #ffffff 100%) !important; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; margin-bottom: 28px;">
                 <tr>
                   <td style="padding: 24px;" class="mobile-padding">
                     <table role="presentation" style="width: 100%; border-collapse: collapse;">
                       <tr>
                         <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; width: 45%;">Job Number</td>
-                        <td style="padding: 12px 0; color: #000000; font-size: 18px; font-weight: 700; text-align: right; width: 55%;">${job.jobNumber}</td>
+                        <td class="dark-text" style="padding: 12px 0; color: #1f2937 !important; font-size: 18px; font-weight: 700; text-align: right; width: 55%;">${job.jobNumber}</td>
                       </tr>
                       <tr>
                         <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
                       </tr>
                       <tr>
                         <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Client Name</td>
-                        <td style="padding: 12px 0; color: #000000; font-size: 17px; font-weight: 600; text-align: right;">${job.clientName}</td>
+                        <td class="dark-text" style="padding: 12px 0; color: #1f2937 !important; font-size: 17px; font-weight: 600; text-align: right;">${job.clientName}</td>
                       </tr>
                       <tr>
                         <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
                       </tr>
                       <tr>
                         <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Forwarding Date</td>
-                        <td style="padding: 12px 0; color: #000000; font-size: 16px; font-weight: 500; text-align: right;">${formatDate(job.forwardingDate)}</td>
+                        <td class="dark-text" style="padding: 12px 0; color: #1f2937 !important; font-size: 16px; font-weight: 500; text-align: right;">${formatDate(job.forwardingDate)}</td>
                       </tr>
                       <tr>
                         <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
@@ -183,11 +191,11 @@ exports.handler = async (event, context) => {
               </table>
 
               <!-- Action Required Box -->
-              <table role="presentation" class="mobile-full-width" style="width: 100%; border-collapse: collapse; background-color: ${daysRemaining <= 0 ? '#fef2f2' : '#fffbeb'}; border-left: 4px solid ${urgencyColor}; border-radius: 8px; margin-bottom: 28px;">
+              <table role="presentation" class="mobile-full-width light-bg" style="width: 100%; border-collapse: collapse; background-color: ${daysRemaining <= 0 ? '#fef2f2' : '#fffbeb'} !important; border-left: 4px solid ${urgencyColor}; border-radius: 8px; margin-bottom: 28px;">
                 <tr>
                   <td style="padding: 18px 20px;" class="mobile-padding">
-                    <p style="margin: 0; color: #000000; font-size: 15px; line-height: 1.6;" class="mobile-text-small">
-                      <strong style="display: block; font-size: 16px; margin-bottom: 6px; color: ${urgencyColor};">⚠️ Action Required</strong>
+                    <p class="dark-text" style="margin: 0; color: #1f2937 !important; font-size: 15px; line-height: 1.6;" class="mobile-text-small">
+                      <strong style="display: block; font-size: 16px; margin-bottom: 6px; color: ${urgencyColor} !important;">⚠️ Action Required</strong>
                       ${daysRemaining < 0 ? 'This job is <strong>overdue</strong>! Please review immediately and update the status.' : 
                         daysRemaining === 0 ? 'This job is <strong>due today</strong>! Please ensure all tasks are completed on time.' : 
                         'Please review this job and ensure all tasks are on track for the deadline.'}
