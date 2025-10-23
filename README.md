@@ -1,4 +1,4 @@
-# Flycast Marketing - Reminder Dashboard
+# Flycast Technologies - Reminder Dashboard
 
 A professional reminder dashboard for tracking job production deadlines and sending automated email reminders.
 
@@ -125,7 +125,7 @@ Reminders are sent daily at 9:00 AM Pakistan Time (PKT).
 
 ## Support
 
-For issues or questions, contact Flycast Marketing support.
+For issues or questions, contact Flycast Technologies support.
 
 ---
 

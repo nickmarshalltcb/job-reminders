@@ -25,7 +25,8 @@ import {
   FaUser,
   FaEdit,
   FaPlay,
-  FaPause
+  FaPause,
+  FaRedo,
 } from 'react-icons/fa';
 import { supabase } from './src/supabaseClient';
 
@@ -252,14 +253,15 @@ const JobReminderSystem = () => {
       };
 
 
-      const response = await fetch('/.netlify/functions/send-reminder', {
+      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/send-reminder`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          job: testJob,
-          emailConfig
+          jobs: [testJob],
+          emailConfig,
+          isBundled: false
         })
       });
 
@@ -286,6 +288,9 @@ const JobReminderSystem = () => {
       const today = new Date(pkTime.toDateString());
       today.setHours(0, 0, 0, 0);
 
+      // Group jobs by due date for bundling
+      const jobsByDate = new Map<string, Job[]>();
+
       for (const job of jobs) {
         if (job.status === 'Completed') continue;
 
@@ -302,27 +307,42 @@ const JobReminderSystem = () => {
         const isDeadlineToday = deadlineDate.toDateString() === today.toDateString() && !job.reminderSent;
 
         if (shouldRemindFromSnooze || isDeadlineToday) {
-          await sendEmailReminder(job);
+          const dateKey = shouldRemindFromSnooze ? snoozedUntil!.toDateString() : deadlineDate.toDateString();
+          
+          if (!jobsByDate.has(dateKey)) {
+            jobsByDate.set(dateKey, []);
+          }
+          jobsByDate.get(dateKey)!.push(job);
+        }
+      }
+
+      // Send bundled emails
+      for (const [dateKey, jobsForDate] of jobsByDate) {
+        if (jobsForDate.length > 0) {
+          await sendEmailReminder(jobsForDate);
         }
       }
     }
   };
 
-  const sendEmailReminder = async (job: Job) => {
+  const sendEmailReminder = async (jobs: Job | Job[]) => {
     if (!emailConfig.configured) {
       return;
     }
 
     try {
+      const jobList = Array.isArray(jobs) ? jobs : [jobs];
+      
       // Send email via Netlify Function
-      const response = await fetch('/.netlify/functions/send-reminder', {
+      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/send-reminder`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          job,
-          emailConfig
+          jobs: jobList,
+          emailConfig,
+          isBundled: jobList.length > 1
         })
       });
 
@@ -330,15 +350,17 @@ const JobReminderSystem = () => {
         throw new Error('Failed to send email reminder');
       }
 
-      // Update database to mark reminder as sent
-      await supabase
-        .from('jobs')
-        .update({
-          reminder_sent: true,
-          last_reminder_date: new Date().toISOString(),
-          snoozed_until: null
-        })
-        .eq('job_number', job.jobNumber);
+      // Update database to mark reminder as sent for all jobs
+      for (const job of jobList) {
+        await supabase
+          .from('jobs')
+          .update({
+            reminder_sent: true,
+            last_reminder_date: new Date().toISOString(),
+            snoozed_until: null
+          })
+          .eq('job_number', job.jobNumber);
+      }
 
       await loadJobs();
       
@@ -664,26 +686,73 @@ const JobReminderSystem = () => {
   }, []);
 
   const sortedAndFilteredJobs = () => {
-    let filtered = jobs.filter(job => {
-      const matchesSearch = job.jobNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        job.clientName.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesFilter = filterStatus === 'all' || job.status === filterStatus;
-      return matchesSearch && matchesFilter;
-    });
+    // First sort ALL jobs, then filter
+    const sortedJobs = [...jobs].sort((a, b) => {
+      let aValue: any = a[sortConfig.key as keyof Job];
+      let bValue: any = b[sortConfig.key as keyof Job];
 
-    return filtered.sort((a, b) => {
-      let aValue = a[sortConfig.key];
-      let bValue = b[sortConfig.key];
-
+      // Handle different data types for sorting
       if (sortConfig.key === 'productionDeadline' || sortConfig.key === 'forwardingDate') {
         aValue = new Date(aValue).getTime();
         bValue = new Date(bValue).getTime();
+      } else if (sortConfig.key === 'daysLeft') {
+        // For days left, we want critical jobs (overdue/urgent) at the top
+        const aDays = getDaysUntilDeadline(a.productionDeadline, a.status);
+        const bDays = getDaysUntilDeadline(b.productionDeadline, b.status);
+        
+        // Handle completed jobs (null days) - sort by job number descending (latest first)
+        if (aDays === null && bDays === null) {
+          // Both completed - sort by job number descending (highest numbers first)
+          const extractNumber = (jobNum: string) => {
+            const match = jobNum.match(/\d+/);
+            return match ? parseInt(match[0], 10) : 0;
+          };
+          
+          const aNum = extractNumber(a.jobNumber);
+          const bNum = extractNumber(b.jobNumber);
+          
+          // Sort descending (higher numbers first)
+          if (aNum !== bNum) {
+            return bNum - aNum;
+          } else {
+            // If numbers are same, sort alphabetically descending
+            return b.jobNumber.toLowerCase().localeCompare(a.jobNumber.toLowerCase());
+          }
+        }
+        if (aDays === null) return 1;  // Completed jobs go to bottom
+        if (bDays === null) return -1; // Completed jobs go to bottom
+        
+        // For active jobs, sort by urgency: overdue (negative) first, then by days remaining
+        aValue = aDays;
+        bValue = bDays;
+      } else if (sortConfig.key === 'jobNumber') {
+        // Extract numeric part from job numbers for proper numeric sorting
+        const extractNumber = (jobNum: string) => {
+          const match = jobNum.match(/\d+/);
+          return match ? parseInt(match[0], 10) : 0;
+        };
+        
+        const aNum = extractNumber(aValue);
+        const bNum = extractNumber(bValue);
+        
+        // If numbers are different, sort by number
+        if (aNum !== bNum) {
+          aValue = aNum;
+          bValue = bNum;
+        } else {
+          // If numbers are same, sort alphabetically
+          aValue = aValue.toLowerCase();
+          bValue = bValue.toLowerCase();
+        }
+      } else if (sortConfig.key === 'clientName' || sortConfig.key === 'status') {
+        aValue = aValue.toLowerCase();
+        bValue = bValue.toLowerCase();
       }
 
-      if (sortConfig.key === 'daysLeft') {
-        aValue = getDaysUntilDeadline(a.productionDeadline, a.status) ?? 999;
-        bValue = getDaysUntilDeadline(b.productionDeadline, b.status) ?? 999;
-      }
+      // Handle null/undefined values
+      if (aValue == null && bValue == null) return 0;
+      if (aValue == null) return sortConfig.direction === 'asc' ? 1 : -1;
+      if (bValue == null) return sortConfig.direction === 'asc' ? -1 : 1;
 
       // Primary sort
       if (aValue < bValue) {
@@ -693,26 +762,20 @@ const JobReminderSystem = () => {
         return sortConfig.direction === 'asc' ? 1 : -1;
       }
       
-      // Secondary sort: fallback to job number (descending - higher numbers first)
-      // Extract numeric part from job numbers for proper numeric sorting
-      const extractNumber = (jobNum: string) => {
-        const match = jobNum.match(/\d+/);
-        return match ? parseInt(match[0], 10) : 0;
-      };
-      
-      const aNum = extractNumber(a.jobNumber);
-      const bNum = extractNumber(b.jobNumber);
-      
-      // Sort descending (higher numbers first)
-      if (aNum > bNum) return -1;
-      if (aNum < bNum) return 1;
-      
-      // If numbers are equal, sort by full job number alphabetically
+      // Secondary sort: fallback to job number for consistent ordering
       const aJobNum = a.jobNumber.toLowerCase();
       const bJobNum = b.jobNumber.toLowerCase();
-      if (aJobNum < bJobNum) return 1;
-      if (aJobNum > bJobNum) return -1;
+      if (aJobNum < bJobNum) return -1;
+      if (aJobNum > bJobNum) return 1;
       return 0;
+    });
+
+    // Then filter the sorted jobs
+    return sortedJobs.filter(job => {
+      const matchesSearch = job.jobNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        job.clientName.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesFilter = filterStatus === 'all' || job.status === filterStatus;
+      return matchesSearch && matchesFilter;
     });
   };
 
@@ -773,7 +836,7 @@ const JobReminderSystem = () => {
               <FaBell className="w-8 h-8 text-white" />
             </div>
           </div>
-          <h1 className="text-3xl font-bold text-center text-slate-100 mb-2">Flycast Marketing</h1>
+          <h1 className="text-3xl font-bold text-center text-slate-100 mb-2">Flycast Technologies</h1>
           <p className="text-center mb-8 text-slate-400 text-sm">Reminder Dashboard</p>
           
           <div className="space-y-4">
@@ -831,7 +894,7 @@ const JobReminderSystem = () => {
                 <FaBell className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-slate-100">Flycast Marketing</h1>
+                <h1 className="text-2xl font-bold text-slate-100">Flycast Technologies</h1>
                 <p className="text-sm text-slate-400">Reminder Dashboard</p>
             </div>
             </div>
@@ -993,8 +1056,17 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                   placeholder="Search by job number or client name..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                  className="w-full pl-12 pr-12 py-3 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                 />
+                {searchTerm && (
+                  <button
+                    onClick={() => setSearchTerm('')}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-slate-700 hover:bg-slate-600 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-all duration-200"
+                    title="Clear search"
+                  >
+                    <FaTimes className="w-3 h-3" />
+                  </button>
+                )}
               </div>
             </div>
             <div className="relative">
@@ -1013,6 +1085,15 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
               </select>
               <FaChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" />
             </div>
+            <Tooltip content="Refresh job data" id="refresh-btn" position="bottom">
+              <button
+                onClick={loadJobs}
+                className="px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center gap-2 text-sm font-medium border border-slate-700"
+              >
+                <FaRedo className="w-4 h-4" />
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
+            </Tooltip>
           </div>
         </div>
 
@@ -1168,36 +1249,52 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex gap-2">
-                            <Tooltip content="Mark this job as completed" id={`complete-${job.jobNumber}`}>
-                            <button
-                              onClick={() => markAsComplete(job)}
-                                className="p-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 transition-all duration-200"
-                            >
-                                <FaCheckCircle className="w-4 h-4" />
-                            </button>
-                            </Tooltip>
+                            {job.status !== 'Completed' ? (
+                              <Tooltip content="Mark this job as completed" id={`complete-${job.jobNumber}`}>
+                                <button
+                                  onClick={() => markAsComplete(job)}
+                                  className="p-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 transition-all duration-200"
+                                >
+                                  <FaCheckCircle className="w-4 h-4" />
+                                </button>
+                              </Tooltip>
+                            ) : (
+                              <Tooltip content="Job is already completed - only deletion allowed" id={`completed-${job.jobNumber}`}>
+                                <button
+                                  disabled
+                                  className="p-2 rounded-lg bg-slate-500/20 text-slate-500 border border-slate-500/30 cursor-not-allowed opacity-50"
+                                >
+                                  <FaCheckCircle className="w-4 h-4" />
+                                </button>
+                              </Tooltip>
+                            )}
                             
                             <div className="snooze-menu-container">
                               <Tooltip 
-                                content={job.snoozedUntil ? `Snoozed until ${new Date(job.snoozedUntil).toLocaleDateString()}` : "Set reminder"} 
+                                content={job.status === 'Completed' ? "Cannot snooze completed jobs" : job.snoozedUntil ? `Snoozed until ${new Date(job.snoozedUntil).toLocaleDateString()}` : "Set reminder"} 
                                 id={`snooze-${job.jobNumber}`}
                               >
                               <button
                                 id={`snooze-btn-${job.jobNumber}`}
                                 onClick={(e) => {
-                                  setShowSnoozeMenu(showSnoozeMenu === job.jobNumber ? null : job.jobNumber);
+                                  if (job.status !== 'Completed') {
+                                    setShowSnoozeMenu(showSnoozeMenu === job.jobNumber ? null : job.jobNumber);
+                                  }
                                 }}
-                                  className={`p-2 rounded-lg border transition-all duration-200 ${
-                                    job.snoozedUntil 
+                                disabled={job.status === 'Completed'}
+                                className={`p-2 rounded-lg border transition-all duration-200 ${
+                                  job.status === 'Completed'
+                                    ? 'bg-gray-500/20 text-gray-400 border-gray-500/30 cursor-not-allowed opacity-50'
+                                    : job.snoozedUntil 
                                       ? 'bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 border-orange-500/50' 
                                       : 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border-blue-500/30'
-                                  }`}
-                                >
-                                  <FaBell className={`w-4 h-4 ${job.snoozedUntil ? 'animate-pulse' : ''}`} />
+                                }`}
+                              >
+                                <FaBell className={`w-4 h-4 ${job.snoozedUntil && job.status !== 'Completed' ? 'animate-pulse' : ''}`} />
                               </button>
                               </Tooltip>
                               
-                              {showSnoozeMenu === job.jobNumber && (
+                              {showSnoozeMenu === job.jobNumber && job.status !== 'Completed' && (
                                 <div 
                                   className="fixed py-2 w-64 rounded-xl bg-slate-800 shadow-2xl border border-slate-700 z-[150] animate-slide-down"
                                   style={{
@@ -1290,8 +1387,19 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
               <span className="text-sm text-slate-400">
                 Showing {startIndex + 1} to {Math.min(endIndex, filteredJobs.length)} of {filteredJobs.length} jobs
               </span>
-              </div>
+            </div>
             <div className="flex items-center gap-2">
+              {/* First Page */}
+              <button
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                className="px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                title="First page"
+              >
+                ««
+              </button>
+              
+              {/* Previous Page */}
               <button
                 onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
                 disabled={currentPage === 1}
@@ -1300,6 +1408,7 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                 Previous
               </button>
               
+              {/* Page Numbers */}
               <div className="flex items-center gap-1">
                 {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                   let pageNum;
@@ -1329,6 +1438,7 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                 })}
               </div>
               
+              {/* Next Page */}
               <button
                 onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
                 disabled={currentPage === totalPages}
@@ -1336,6 +1446,35 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
               >
                 Next
               </button>
+              
+              {/* Last Page */}
+              <button
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                className="px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                title="Last page"
+              >
+                »»
+              </button>
+              
+              {/* Jump to Page */}
+              <div className="flex items-center gap-2 ml-4 pl-4 border-l border-slate-700">
+                <span className="text-sm text-slate-400">Go to:</span>
+                <input
+                  type="number"
+                  min="1"
+                  max={totalPages}
+                  value={currentPage}
+                  onChange={(e) => {
+                    const page = parseInt(e.target.value);
+                    if (page >= 1 && page <= totalPages) {
+                      setCurrentPage(page);
+                    }
+                  }}
+                  className="w-16 px-2 py-1 rounded bg-slate-800 border border-slate-700 text-slate-100 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <span className="text-sm text-slate-400">of {totalPages}</span>
+              </div>
             </div>
           </div>
         )}

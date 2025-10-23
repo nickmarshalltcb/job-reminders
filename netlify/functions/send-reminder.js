@@ -1,22 +1,59 @@
-const nodemailer = require('nodemailer');
 
-exports.handler = async (event, context) => {
+import nodemailer from 'nodemailer';
+
+export const handler = async (event, context) => {
+  // Handle CORS preflight requests
+  if (event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      },
+      body: ''
+    };
+  }
+
   // Only allow POST requests
   if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({ error: 'Method not allowed' })
     };
   }
 
   try {
-    const { job, emailConfig } = JSON.parse(event.body);
+    const { jobs, emailConfig, isBundled } = JSON.parse(event.body);
+
+    // Handle both single job and bundled jobs
+    const jobList = Array.isArray(jobs) ? jobs : [jobs];
 
     // Validate required data
-    if (!job || !emailConfig) {
+    if (!jobList.length || !emailConfig) {
       return {
         statusCode: 400,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ error: 'Missing required data' })
+      };
+    }
+
+    // Validate email configuration
+    if (!emailConfig.toEmail || !emailConfig.fromEmail || !emailConfig.fromPassword) {
+      return {
+        statusCode: 400,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ error: 'Incomplete email configuration' })
       };
     }
 
@@ -38,26 +75,49 @@ exports.handler = async (event, context) => {
       }
     });
 
-    // Calculate days remaining
+    // Calculate urgency for all jobs
     const today = new Date();
-    const deadline = new Date(job.productionDeadline);
-    const daysRemaining = Math.ceil((deadline - today) / (1000 * 60 * 60 * 24));
-    
+    let maxUrgency = 0; // 0: on track, 1: urgent, 2: due today, 3: overdue
     let urgencyColor = '#10b981'; // green
     let urgencyText = 'On Track';
     
+    const jobsWithUrgency = jobList.map(job => {
+      const deadline = new Date(job.productionDeadline);
+      const daysRemaining = Math.ceil((deadline - today) / (1000 * 60 * 60 * 24));
+      
+      let jobUrgency = 0;
+      let jobColor = '#10b981';
+      let jobText = 'On Track';
+    
     if (daysRemaining < 0) {
-      urgencyColor = '#ef4444'; // red
-      urgencyText = 'OVERDUE';
+        jobUrgency = 3;
+        jobColor = '#ef4444';
+        jobText = 'OVERDUE';
     } else if (daysRemaining === 0) {
-      urgencyColor = '#f59e0b'; // orange
-      urgencyText = 'DUE TODAY';
+        jobUrgency = 2;
+        jobColor = '#f59e0b';
+        jobText = 'DUE TODAY';
     } else if (daysRemaining <= 2) {
-      urgencyColor = '#f59e0b'; // orange
-      urgencyText = 'URGENT';
-    }
+        jobUrgency = 1;
+        jobColor = '#f59e0b';
+        jobText = 'URGENT';
+      }
+      
+      if (jobUrgency > maxUrgency) {
+        maxUrgency = jobUrgency;
+        urgencyColor = jobColor;
+        urgencyText = jobText;
+      }
+      
+      return {
+        ...job,
+        daysRemaining,
+        urgencyColor: jobColor,
+        urgencyText: jobText
+      };
+    });
 
-    // HTML Email Template - Enhanced Version
+    // HTML Email Template - Gmail Optimized
     const htmlContent = `
 <!DOCTYPE html>
 <html lang="en">
@@ -65,236 +125,232 @@ exports.handler = async (event, context) => {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="color-scheme" content="light">
-  <meta name="supported-color-schemes" content="light">
-  <title>Job Reminder - ${job.jobNumber}</title>
+  <title>Job Reminder - ${jobList.length === 1 ? jobList[0].jobNumber : `${jobList.length} Projects`}</title>
   <!--[if mso]>
-  <style type="text/css">
-    body, table, td {font-family: Arial, Helvetica, sans-serif !important;}
-  </style>
+  <noscript>
+    <xml>
+      <o:OfficeDocumentSettings>
+        <o:PixelsPerInch>96</o:PixelsPerInch>
+      </o:OfficeDocumentSettings>
+    </xml>
+  </noscript>
   <![endif]-->
   <style type="text/css">
-    /* Force light mode and prevent dark mode color inversion */
-    * { color-scheme: light !important; }
+    /* Gmail-specific resets */
+    .ExternalClass { width: 100%; }
+    .ExternalClass, .ExternalClass p, .ExternalClass span, .ExternalClass font, .ExternalClass td, .ExternalClass div { line-height: 100%; }
     
-    @media (prefers-color-scheme: dark) {
-      .light-bg { 
-        background-color: #ffffff !important; 
-        background: #ffffff !important;
-      }
-      .dark-text { 
-        color: #000000 !important; 
-        -webkit-text-fill-color: #000000 !important;
-      }
-      .force-light {
-        background-color: #ffffff !important;
-        color: #000000 !important;
-      }
-    }
+    /* Prevent Gmail from changing link colors */
+    a[x-apple-data-detectors] { color: inherit !important; text-decoration: none !important; font-size: inherit !important; font-family: inherit !important; font-weight: inherit !important; line-height: inherit !important; }
     
-    /* Gmail specific overrides */
-    [data-ogsc] .dark-text { color: #000000 !important; }
-    [data-ogsc] .light-bg { background-color: #ffffff !important; }
+    /* Force Gmail to display images */
+    img { -ms-interpolation-mode: bicubic; }
     
-    /* Mobile-first responsive styles */
-    @media only screen and (max-width: 600px) {
-      .mobile-padding { padding: 20px !important; }
-      .mobile-text-small { font-size: 14px !important; }
-      .mobile-text-medium { font-size: 16px !important; }
-      .mobile-heading { font-size: 24px !important; }
-      .mobile-badge { padding: 10px 20px !important; font-size: 15px !important; }
-      .mobile-button { padding: 14px 32px !important; font-size: 15px !important; }
+    /* Mobile responsiveness */
+    @media screen and (max-width: 600px) {
       .mobile-full-width { width: 100% !important; max-width: 100% !important; }
-      .mobile-hide { display: none !important; }
-      .mobile-stack { display: block !important; width: 100% !important; }
+      .mobile-padding { padding: 15px !important; }
+      .mobile-text { font-size: 14px !important; }
+      .mobile-button { display: block !important; width: 100% !important; margin: 8px 0 !important; }
     }
   </style>
 </head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;">
-  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f3f4f6;">
+<body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: Arial, sans-serif; line-height: 1.4; color: #333333;">
+  <!-- Main Container -->
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%; background-color: #f5f5f5; padding: 20px 0;">
     <tr>
-      <td align="center" style="padding: 40px 20px;" class="mobile-padding">
-        <table role="presentation" class="mobile-full-width light-bg" style="max-width: 600px; width: 100%; margin: 0 auto; background-color: #ffffff !important; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);">
+      <td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%; max-width: 600px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
           
           <!-- Header -->
           <tr>
-            <td style="background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); padding: 40px; text-align: center;" class="mobile-padding">
-              <table role="presentation" style="width: 100%; border-collapse: collapse;">
+            <td style="background-color: #2563eb; padding: 30px 20px; border-radius: 8px 8px 0 0;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%;">
                 <tr>
                   <td align="center">
-                    <div style="width: 70px; height: 70px; background-color: rgba(255, 255, 255, 0.25); border-radius: 16px; display: inline-block; line-height: 70px; margin-bottom: 16px; text-align: center;">
-                      <span style="font-size: 36px; vertical-align: middle;">🔔</span>
-                    </div>
-                    <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700; letter-spacing: -0.5px;" class="mobile-heading">Job Reminder</h1>
-                    <p style="margin: 8px 0 0 0; color: rgba(255, 255, 255, 0.95); font-size: 15px; font-weight: 500;" class="mobile-text-small">Flycast Marketing</p>
+                    <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: bold; font-family: Arial, sans-serif;">
+                      Job Reminder
+                    </h1>
+                    <p style="margin: 8px 0 0 0; color: #dbeafe; font-size: 16px; font-family: Arial, sans-serif;">
+                      ${jobList.length === 1 ? 'Job Status Update' : `${jobList.length} Jobs Requiring Attention`}
+                    </p>
                   </td>
                 </tr>
               </table>
             </td>
           </tr>
 
-          <!-- Urgency Badge -->
+          <!-- Job Details -->
+          ${jobsWithUrgency.map((job, index) => `
           <tr>
-            <td style="padding: 0 40px;" class="mobile-padding">
-              <table role="presentation" style="width: 100%; border-collapse: collapse;">
+            <td style="padding: 20px; border-bottom: ${index === jobsWithUrgency.length - 1 ? 'none' : '1px solid #e5e7eb'};">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%;">
                 <tr>
-                  <td align="center" style="padding: 0;">
-                    <div style="margin-top: -28px; display: inline-block; background-color: ${urgencyColor}; color: #ffffff; padding: 14px 32px; border-radius: 10px; font-weight: 700; font-size: 17px; box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15); letter-spacing: 0.5px;" class="mobile-badge">
-                      ${urgencyText}
-                    </div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
+                  <td>
+                    <!-- Job Header -->
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%; margin-bottom: 15px;">
+                      <tr>
+                        <td>
+                           <h2 style="margin: 0; color: #1f2937; font-size: 20px; font-weight: bold; font-family: Arial, sans-serif;">
+                             ${job.jobNumber}
+                           </h2>
+                           <p style="margin: 4px 0 0 0; color: #6b7280; font-size: 14px; font-family: Arial, sans-serif;">
+                             Job No.
+                           </p>
+                        </td>
+                        <td align="right">
+                          <span style="background-color: #3b82f6; color: #ffffff; padding: 6px 12px; border-radius: 4px; font-size: 12px; font-weight: bold; font-family: Arial, sans-serif; text-transform: uppercase;">
+                            ${job.status}
+                          </span>
+                        </td>
+                      </tr>
+                    </table>
 
-          <!-- Content -->
-          <tr>
-            <td style="padding: 40px;" class="mobile-padding">
-              <p style="margin: 0 0 28px 0; color: #4b5563; font-size: 16px; line-height: 1.6; text-align: center;" class="mobile-text-small">
-                This is an automated reminder for the following job:
-              </p>
-
-              <!-- Job Details Card -->
-              <table role="presentation" class="mobile-full-width light-bg" style="width: 100%; border-collapse: collapse; background: linear-gradient(to bottom, #f9fafb 0%, #ffffff 100%) !important; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; margin-bottom: 28px;">
-                <tr>
-                  <td style="padding: 24px;" class="mobile-padding">
-                    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                    <!-- Job Info Grid -->
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%;">
                       <tr>
-                        <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; width: 45%;">Job Number</td>
-                        <td class="dark-text force-light" style="padding: 12px 0; color: #000000 !important; font-size: 18px; font-weight: 700; text-align: right; width: 55%;">${job.jobNumber}</td>
-                      </tr>
-                      <tr>
-                        <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Client Name</td>
-                        <td class="dark-text force-light" style="padding: 12px 0; color: #000000 !important; font-size: 17px; font-weight: 600; text-align: right;">${job.clientName}</td>
-                      </tr>
-                      <tr>
-                        <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Forwarding Date</td>
-                        <td class="dark-text force-light" style="padding: 12px 0; color: #000000 !important; font-size: 16px; font-weight: 500; text-align: right;">${formatDate(job.forwardingDate)}</td>
-                      </tr>
-                      <tr>
-                        <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Production Deadline</td>
-                        <td style="padding: 12px 0; color: ${urgencyColor}; font-size: 17px; font-weight: 700; text-align: right;">${formatDate(job.productionDeadline)}</td>
-                      </tr>
-                      <tr>
-                        <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Status</td>
-                        <td style="padding: 12px 0; text-align: right;">
-                          <span style="display: inline-block; background-color: #dbeafe; color: #1e40af; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600;">${job.status}</span>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #f3f4f6;">
+                          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%;">
+                            <tr>
+                              <td style="width: 50%;">
+                                <p style="margin: 0; color: #6b7280; font-size: 12px; font-weight: bold; text-transform: uppercase; font-family: Arial, sans-serif;">Client</p>
+                                <p style="margin: 4px 0 0 0; color: #1f2937; font-size: 16px; font-weight: bold; font-family: Arial, sans-serif;">${job.clientName}</p>
+                              </td>
+                              <td style="width: 50%; text-align: right;">
+                                <p style="margin: 0; color: #6b7280; font-size: 12px; font-weight: bold; text-transform: uppercase; font-family: Arial, sans-serif;">Forwarding Date</p>
+                                <p style="margin: 4px 0 0 0; color: #374151; font-size: 14px; font-family: Arial, sans-serif;">${formatDate(job.forwardingDate)}</p>
+                              </td>
+                            </tr>
+                          </table>
                         </td>
                       </tr>
                       <tr>
-                        <td colspan="2" style="padding: 0;"><div style="height: 1px; background-color: #e5e7eb; margin: 4px 0;"></div></td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 12px 0; color: #6b7280; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Days Remaining</td>
-                        <td style="padding: 12px 0; color: ${urgencyColor}; font-size: 24px; font-weight: 800; text-align: right; letter-spacing: -0.5px;">${daysRemaining < 0 ? 'OVERDUE' : daysRemaining === 0 ? 'TODAY' : daysRemaining + ' DAYS'}</td>
+                        <td style="padding: 8px 0;">
+                          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%;">
+                            <tr>
+                              <td style="width: 50%;">
+                                <p style="margin: 0; color: #6b7280; font-size: 12px; font-weight: bold; text-transform: uppercase; font-family: Arial, sans-serif;">Production Deadline</p>
+                                <p style="margin: 4px 0 0 0; color: ${job.urgencyColor}; font-size: 18px; font-weight: bold; font-family: Arial, sans-serif;">${formatDate(job.productionDeadline)}</p>
+                              </td>
+                              <td style="width: 50%; text-align: right;">
+                                <p style="margin: 0; color: #6b7280; font-size: 12px; font-weight: bold; text-transform: uppercase; font-family: Arial, sans-serif;">Days Remaining</p>
+                                <p style="margin: 4px 0 0 0; color: ${job.urgencyColor}; font-size: 20px; font-weight: bold; font-family: Arial, sans-serif;">${job.daysRemaining < 0 ? 'OVERDUE' : job.daysRemaining === 0 ? 'TODAY' : job.daysRemaining + ' DAYS'}</p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
                       </tr>
                     </table>
                   </td>
                 </tr>
               </table>
+            </td>
+          </tr>
+          `).join('')}
 
-              <!-- Action Required Box -->
-              <table role="presentation" class="mobile-full-width light-bg" style="width: 100%; border-collapse: collapse; background-color: ${daysRemaining <= 0 ? '#fef2f2' : '#fffbeb'} !important; border-left: 4px solid ${urgencyColor}; border-radius: 8px; margin-bottom: 28px;">
-                <tr>
-                  <td style="padding: 18px 20px;" class="mobile-padding">
-                    <p class="dark-text force-light" style="margin: 0; color: #000000 !important; font-size: 15px; line-height: 1.6;" class="mobile-text-small">
-                      <strong style="display: block; font-size: 16px; margin-bottom: 6px; color: ${urgencyColor} !important;">⚠️ Action Required</strong>
-                      ${daysRemaining < 0 ? 'This job is <strong>overdue</strong>! Please review immediately and update the status.' : 
-                        daysRemaining === 0 ? 'This job is <strong>due today</strong>! Please ensure all tasks are completed on time.' : 
-                        'Please review this job and ensure all tasks are on track for the deadline.'}
+          <!-- Action Required -->
+          <tr>
+            <td style="padding: 20px; background-color: ${maxUrgency >= 2 ? '#fef2f2' : '#fffbeb'}; border-left: 4px solid ${urgencyColor};">
+               <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%;">
+                 <tr>
+                   <td style="padding-left: 0; vertical-align: top;">
+                     <h3 style="margin: 0 0 8px 0; color: ${urgencyColor}; font-size: 16px; font-weight: bold; font-family: Arial, sans-serif;">Action Required</h3>
+                    <p style="margin: 0; color: #1f2937; font-size: 15px; line-height: 1.5; font-family: Arial, sans-serif;">
+                      ${jobList.length === 1 ? 
+                        (jobsWithUrgency[0].daysRemaining < 0 ? 'This job is <strong>late</strong>. Please follow up with the production team immediately.' : 
+                         jobsWithUrgency[0].daysRemaining === 0 ? 'This job is <strong>due today</strong>. Please check the status with the production team.' : 
+                         'Please follow up with the production team to ensure this job is on track for the deadline.') :
+                        `You have ${jobList.length} jobs requiring attention. Please follow up with the production team for each job to ensure all tasks are on track for their respective deadlines.`}
                     </p>
                   </td>
                 </tr>
               </table>
+            </td>
+          </tr>
 
-              <!-- Dashboard Button -->
-              <table role="presentation" style="width: 100%; border-collapse: collapse;">
+           <!-- Action Buttons -->
+           <tr>
+             <td style="padding: 20px; text-align: center;">
+               <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%;">
+                 <tr>
+                   <td align="center">
+                     <a href="https://jobs-reminder.netlify.app/${jobList.length === 1 ? `?job=${encodeURIComponent(jobList[0].jobNumber)}` : ''}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; font-family: Arial, sans-serif;">
+                       View in Dashboard
+                     </a>
+                   </td>
+                 </tr>
+               </table>
+             </td>
+           </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 20px; background-color: #f9fafb; border-top: 1px solid #e5e7eb; border-radius: 0 0 8px 8px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%;">
                 <tr>
-                  <td align="center" style="padding: 10px 0;">
-                    <a href="${process.env.URL || 'https://your-app.netlify.app'}?job=${encodeURIComponent(job.jobNumber)}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4); transition: all 0.2s;" class="mobile-button">
-                      View Dashboard →
-                    </a>
+                  <td align="center">
+                     <p style="margin: 0 0 10px 0; color: #6b7280; font-size: 14px; font-family: Arial, sans-serif;">
+                       <strong>Flycast Technologies</strong><br>
+                       Job Management & Reminder System
+                     </p>
+                     <p style="margin: 0; color: #9ca3af; font-size: 12px; font-family: Arial, sans-serif;">
+                       This is an automated message. If you cannot view the dashboard button above, copy and paste this link:<br>
+                       <span style="color: #6b7280; word-break: break-all;">https://jobs-reminder.netlify.app/${jobList.length === 1 ? `?job=${encodeURIComponent(jobList[0].jobNumber)}` : ''}</span>
+                     </p>
                   </td>
                 </tr>
               </table>
             </td>
           </tr>
 
-          <!-- Footer -->
-          <tr>
-            <td style="background-color: #f9fafb; padding: 32px 40px; text-align: center; border-top: 1px solid #e5e7eb;" class="mobile-padding">
-              <p style="margin: 0 0 6px 0; color: #6b7280; font-size: 14px; font-weight: 500;" class="mobile-text-small">
-                Sent by <strong style="color: #374151;">Flycast Marketing Reminder Dashboard</strong>
-              </p>
-              <p style="margin: 0; color: #9ca3af; font-size: 12px;" class="mobile-text-small">
-                Automated reminder sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Karachi', hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' })}
-              </p>
-            </td>
-          </tr>
-        </table>
-        
-        <!-- Email Client Support Text -->
-        <table role="presentation" style="max-width: 600px; width: 100%; margin: 20px auto 0;">
-          <tr>
-            <td align="center" style="padding: 0 20px;">
-              <p style="margin: 0; color: #9ca3af; font-size: 11px; line-height: 1.5;">
-                If you cannot view the dashboard button above, copy and paste this link: <br>
-                <span style="color: #6b7280;">${process.env.URL || 'https://your-app.netlify.app'}?job=${encodeURIComponent(job.jobNumber)}</span>
-              </p>
-            </td>
-          </tr>
         </table>
       </td>
     </tr>
   </table>
 </body>
-</html>
-    `;
+</html>`;
 
-    // Plain text version for email clients that don't support HTML
-    const textContent = `
-JOB REMINDER - ${urgencyText}
+     // Plain text version for email clients that don't support HTML
+     const textContent = `
+FLYCAST TECHNOLOGIES - JOB REMINDER
+${urgencyText}
 
-This is an automated reminder for the following job:
+${jobList.length === 1 ? 'JOB DETAILS:' : 'JOBS REQUIRING ATTENTION:'}
+───────────────────────────────────────────────────────────────
+${jobsWithUrgency.map((job, index) => `
+${index > 0 ? '───────────────────────────────────────────────────────────────' : ''}
+Job No.: ${job.jobNumber}
+Client: ${job.clientName}
+Forwarding Date: ${formatDate(job.forwardingDate)}
+Production Deadline: ${formatDate(job.productionDeadline)}
+Status: ${job.status}
+Days Remaining: ${job.daysRemaining < 0 ? 'OVERDUE' : job.daysRemaining === 0 ? 'TODAY' : job.daysRemaining + ' days'}
+`).join('')}
 
-Job Details:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Job Number: ${job.jobNumber}
-• Client: ${job.clientName}
-• Forwarding Date: ${formatDate(job.forwardingDate)}
-• Production Deadline: ${formatDate(job.productionDeadline)}
-• Status: ${job.status}
-• Days Remaining: ${daysRemaining < 0 ? 'OVERDUE' : daysRemaining === 0 ? 'TODAY' : daysRemaining + ' days'}
+ACTION REQUIRED:
+${jobList.length === 1 ? 
+  (jobsWithUrgency[0].daysRemaining < 0 ? 'This job is LATE. Please follow up with the production team immediately.' : 
+   jobsWithUrgency[0].daysRemaining === 0 ? 'This job is DUE TODAY. Please check the status with the production team.' : 
+   'Please follow up with the production team to ensure this job is on track for the deadline.') :
+  `You have ${jobList.length} jobs requiring attention. Please follow up with the production team for each job to ensure all tasks are on track for their respective deadlines.`}
 
-⚠️ Action Required:
-${daysRemaining < 0 ? 'This job is overdue! Please review immediately and update the status.' : 
-  daysRemaining === 0 ? 'This job is due today! Please ensure all tasks are completed on time.' : 
-  'Please review this job and ensure all tasks are on track for the deadline.'}
+ QUICK ACTIONS:
+ ───────────────────────────────────────────────────────────────
+ • View in Dashboard: https://jobs-reminder.netlify.app/${jobList.length === 1 ? `?job=${encodeURIComponent(jobList[0].jobNumber)}` : ''}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
+═══════════════════════════════════════════════════════════════
 
-Sent by Flycast Marketing Reminder Dashboard
-Automated email sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Karachi' })} PKT
-    `;
+Flycast Technologies - Job Management & Reminder System
+Automated reminder sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Karachi', hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' })}
+
+This is an automated message. Please do not reply to this email.
+     `;
 
     // Email options
     const mailOptions = {
-      from: `"Flycast Marketing Reminders" <${emailConfig.fromEmail}>`,
+      from: `"Flycast Technologies" <${emailConfig.fromEmail}>`,
       to: emailConfig.toEmail,
-      subject: `Reminder: ${job.jobNumber} (${job.clientName}) - ${urgencyText}`,
+      subject: `Reminder: ${jobList.length === 1 ? `${jobList[0].jobNumber} (${jobList[0].clientName})` : `${jobList.length} Jobs`} - ${urgencyText}`,
       text: textContent,
       html: htmlContent
     };
@@ -304,6 +360,10 @@ Automated email sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/K
 
     return {
       statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({ 
         success: true, 
         message: 'Reminder email sent successfully' 
@@ -314,6 +374,10 @@ Automated email sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/K
     console.error('Error sending email:', error);
     return {
       statusCode: 500,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({ 
         error: 'Failed to send email',
         details: error.message 
@@ -321,4 +385,3 @@ Automated email sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/K
     };
   }
 };
-
