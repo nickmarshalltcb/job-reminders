@@ -330,7 +330,10 @@ const JobReminderSystem = () => {
       if (!session?.access_token) return;
       
       setIsEmailConfigLoading(true);
-      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/email-config`, {
+      const baseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+        ? `${window.location.protocol}//${window.location.hostname}:8888`
+        : window.location.origin;
+      const response = await fetch(`${baseUrl}/.netlify/functions/email-config`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -383,7 +386,10 @@ const JobReminderSystem = () => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
-      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/email-config`, {
+      const baseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+        ? `${window.location.protocol}//${window.location.hostname}:8888`
+        : window.location.origin;
+      const response = await fetch(`${baseUrl}/.netlify/functions/email-config`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -454,7 +460,10 @@ const JobReminderSystem = () => {
         status: 'In Production'
       };
 
-      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/send-reminder`, {
+      const baseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+        ? `${window.location.protocol}//${window.location.hostname}:8888`
+        : window.location.origin;
+      const response = await fetch(`${baseUrl}/.netlify/functions/send-reminder`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -547,7 +556,10 @@ const JobReminderSystem = () => {
 
     try {
       setLoading('checkMissedReminders', true);
-      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/check-missed-reminders`, {
+      const baseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+        ? `${window.location.protocol}//${window.location.hostname}:8888`
+        : window.location.origin;
+      const response = await fetch(`${baseUrl}/.netlify/functions/check-missed-reminders`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -584,7 +596,10 @@ const JobReminderSystem = () => {
       const jobList = Array.isArray(jobs) ? jobs : [jobs];
       
       // Send email via Netlify Function
-      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/send-reminder`, {
+      const baseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+        ? `${window.location.protocol}//${window.location.hostname}:8888`
+        : window.location.origin;
+      const response = await fetch(`${baseUrl}/.netlify/functions/send-reminder`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
