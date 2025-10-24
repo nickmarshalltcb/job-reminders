@@ -135,7 +135,7 @@ export const handler = async (event, context) => {
   }
 
   try {
-    const { method, user_id, email_config } = JSON.parse(event.body || '{}');
+    const { method, emailConfig } = JSON.parse(event.body || '{}');
     const authHeader = event.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -197,7 +197,7 @@ export const handler = async (event, context) => {
       case 'POST':
       case 'PUT':
         // Save or update email configuration
-        if (!email_config || !email_config.toEmail || !email_config.fromEmail || !email_config.fromPassword) {
+        if (!emailConfig || !emailConfig.toEmail || !emailConfig.fromEmail || !emailConfig.fromPassword) {
           return {
             statusCode: 400,
             headers: {
@@ -210,10 +210,10 @@ export const handler = async (event, context) => {
 
         const configData = {
           user_id: userId,
-          to_email: email_config.toEmail,
-          from_email: email_config.fromEmail,
-          from_password: email_config.fromPassword,
-          configured: email_config.configured || false,
+          to_email: emailConfig.toEmail,
+          from_email: emailConfig.fromEmail,
+          from_password: emailConfig.fromPassword,
+          configured: emailConfig.configured || false,
           updated_at: new Date().toISOString()
         };
 

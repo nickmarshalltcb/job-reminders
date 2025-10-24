@@ -165,17 +165,21 @@ const JobReminderSystem = () => {
     };
   }, []);
 
+  // Track if we've already logged startup to prevent excessive logging
+  const [startupLogged, setStartupLogged] = useState(false);
+
   useEffect(() => {
-    if (session) {
+    if (session && !startupLogged) {
       loadJobs();
       loadEmailConfig(); // Now async
       checkReminders();
       checkMissedReminders(); // Check for missed reminders on startup
-      logSystemStartup(); // Log system startup
+      logSystemStartup(); // Log system startup only once
+      setStartupLogged(true);
       const interval = setInterval(checkReminders, 300000); // Check every 5 minutes
       return () => clearInterval(interval);
     }
-  }, [session]);
+  }, [session, startupLogged]);
 
   // Close snooze menu when clicking outside
   useEffect(() => {
@@ -274,6 +278,22 @@ const JobReminderSystem = () => {
   const validateEmail = (email: string): boolean => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
+  };
+
+  const validateEmailAvailability = async (email: string): Promise<boolean> => {
+    try {
+      // Check if it's a valid Gmail address for the sender
+      if (email.includes('@gmail.com')) {
+        return true; // Assume Gmail addresses are available
+      }
+      
+      // For other email providers, we can add more sophisticated validation
+      // For now, just validate the format
+      return validateEmail(email);
+    } catch (error) {
+      console.error('Error validating email availability:', error);
+      return false;
+    }
   };
 
   const validateEmailConfig = () => {
@@ -1849,7 +1869,16 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
 
             {/* Modal Content */}
             <div className="p-6">
-              <div className="grid grid-cols-1 gap-6 mb-6">
+              {isEmailConfigLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="flex items-center gap-3">
+                    <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-slate-300">Loading email configuration...</span>
+                  </div>
+                </div>
+              ) : (
+                <>
+                <div className="grid grid-cols-1 gap-6 mb-6">
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">
                     <span className="flex items-center gap-2">
@@ -2007,6 +2036,8 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                   Send Test Email
                 </button>
               </div>
+              </>
+              )}
             </div>
           </div>
         </div>

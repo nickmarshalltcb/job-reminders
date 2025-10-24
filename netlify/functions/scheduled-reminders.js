@@ -140,8 +140,8 @@ const sendEmailReminder = async (jobs, emailConfig) => {
     const transporter = nodemailer.createTransporter({
       service: 'gmail',
       auth: {
-        user: emailConfig.from_email,
-        pass: emailConfig.from_password
+        user: emailConfig.fromEmail,
+        pass: emailConfig.fromPassword
       }
     });
 
@@ -418,8 +418,8 @@ This is an automated message. Please do not reply to this email.
 
     // Email options
     const mailOptions = {
-      from: `"Flycast Technologies" <${emailConfig.from_email}>`,
-      to: emailConfig.to_email,
+      from: `"Flycast Technologies" <${emailConfig.fromEmail}>`,
+      to: emailConfig.toEmail,
       subject: `Reminder: ${jobList.length === 1 ? `${jobList[0].job_number} (${jobList[0].client_name})` : `${jobList.length} Jobs`} - ${urgencyText}`,
       text: textContent,
       html: htmlContent
