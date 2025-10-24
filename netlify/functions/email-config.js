@@ -121,6 +121,13 @@ const sendDiscordLog = async (type, message, data = {}, level = 'info') => {
 };
 
 export const handler = async (event, context) => {
+  console.log('Email config handler called:', {
+    method: event.httpMethod,
+    path: event.path,
+    headers: event.headers,
+    body: event.body
+  });
+
   // Handle CORS preflight requests
   if (event.httpMethod === 'OPTIONS') {
     return {
@@ -134,9 +141,42 @@ export const handler = async (event, context) => {
     };
   }
 
+  // Check if method is allowed
+  if (!['GET', 'POST', 'PUT', 'DELETE'].includes(event.httpMethod)) {
+    console.log('Method not allowed:', event.httpMethod);
+    return {
+      statusCode: 405,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        error: 'Method not allowed',
+        allowedMethods: ['GET', 'POST', 'PUT', 'DELETE'],
+        receivedMethod: event.httpMethod
+      })
+    };
+  }
+
   try {
     console.log('Email config API called with method:', event.httpMethod);
     console.log('Request body:', event.body);
+    
+    // Simple health check
+    if (event.path === '/.netlify/functions/email-config' && event.httpMethod === 'GET' && !event.body) {
+      return {
+        statusCode: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          status: 'OK',
+          message: 'Email config function is working',
+          timestamp: new Date().toISOString()
+        })
+      };
+    }
     
     const { method, emailConfig } = JSON.parse(event.body || '{}');
     const authHeader = event.headers.authorization;
