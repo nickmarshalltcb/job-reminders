@@ -135,6 +135,9 @@ export const handler = async (event, context) => {
   }
 
   try {
+    console.log('Email config API called with method:', event.httpMethod);
+    console.log('Request body:', event.body);
+    
     const { method, emailConfig } = JSON.parse(event.body || '{}');
     const authHeader = event.headers.authorization;
     
@@ -152,9 +155,11 @@ export const handler = async (event, context) => {
     const token = authHeader.replace('Bearer ', '');
     
     // Verify the token with Supabase
+    console.log('Verifying token with Supabase...');
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
     if (authError || !user) {
+      console.log('Auth error:', authError);
       return {
         statusCode: 401,
         headers: {
@@ -164,6 +169,8 @@ export const handler = async (event, context) => {
         body: JSON.stringify({ error: 'Unauthorized - Invalid token' })
       };
     }
+    
+    console.log('User authenticated:', user.id);
 
     const userId = user.id;
 
@@ -196,8 +203,12 @@ export const handler = async (event, context) => {
 
       case 'POST':
       case 'PUT':
+        console.log('Saving email configuration for user:', userId);
+        console.log('Email config data:', emailConfig);
+        
         // Save or update email configuration
         if (!emailConfig || !emailConfig.toEmail || !emailConfig.fromEmail || !emailConfig.fromPassword) {
+          console.log('Missing required fields:', { toEmail: emailConfig?.toEmail, fromEmail: emailConfig?.fromEmail, fromPassword: emailConfig?.fromPassword });
           return {
             statusCode: 400,
             headers: {

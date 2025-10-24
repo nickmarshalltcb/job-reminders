@@ -379,6 +379,10 @@ const JobReminderSystem = () => {
       setLoading('saveEmailConfig', true);
       setEmailConfigErrors({ toEmail: '', fromEmail: '', fromPassword: '' });
 
+      // Add timeout to prevent infinite loading
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
       const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/email-config`, {
         method: 'POST',
         headers: {
@@ -388,13 +392,16 @@ const JobReminderSystem = () => {
         body: JSON.stringify({
           method: 'SAVE',
           emailConfig: {
-            to_email: emailConfig.toEmail,
-            from_email: emailConfig.fromEmail,
-            from_password: emailConfig.fromPassword,
+            toEmail: emailConfig.toEmail,
+            fromEmail: emailConfig.fromEmail,
+            fromPassword: emailConfig.fromPassword,
             configured: true
           }
-        })
+        }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         const result = await response.json();
@@ -411,7 +418,15 @@ const JobReminderSystem = () => {
       }
     } catch (error) {
       console.error('Error saving email config:', error);
-      showAlert('Failed to save email configuration', 'error');
+      
+      if (error.name === 'AbortError') {
+        showAlert('Request timed out. Please check your connection and try again.', 'error');
+      } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        showAlert('Network error. Please check your connection and try again.', 'error');
+      } else {
+        showAlert(`Failed to save email configuration: ${error.message}`, 'error');
+      }
+      
       await logEmailOperation('save configuration', { error: error.message }, false);
     } finally {
       setIsEmailConfigSaving(false);
