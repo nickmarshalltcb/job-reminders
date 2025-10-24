@@ -45,3 +45,7 @@ coverage/
 
 # Local Netlify folder
 .netlify
+
+# Database setup files (should be run manually in Supabase)
+setup-database.sql
+test-db-*.js

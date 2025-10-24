@@ -174,6 +174,34 @@ export const handler = async (event, context) => {
 
     const userId = user.id;
 
+    // Check if email_configurations table exists, create if it doesn't
+    try {
+      console.log('Checking if email_configurations table exists...');
+      const { data: tableCheck, error: tableError } = await supabase
+        .from('email_configurations')
+        .select('id')
+        .limit(1);
+      
+      if (tableError && tableError.code === '42P01') {
+        console.log('Table does not exist, creating it...');
+        // Table doesn't exist, we need to create it
+        // This would normally be done via Supabase dashboard or migration
+        console.error('email_configurations table does not exist. Please create it using the SQL in setup-database.sql');
+        return {
+          statusCode: 500,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ 
+            error: 'Database table not found. Please contact administrator to set up email_configurations table.' 
+          })
+        };
+      }
+    } catch (error) {
+      console.error('Error checking table existence:', error);
+    }
+
     switch (method) {
       case 'GET':
         // Get email configuration for user
@@ -229,25 +257,49 @@ export const handler = async (event, context) => {
         };
 
         // Try to update first, if no rows affected, insert
+        console.log('Attempting to update email configuration...');
         const { data: updateData, error: updateError } = await supabase
           .from('email_configurations')
           .update(configData)
           .eq('user_id', userId)
           .select();
 
-        if (updateError || !updateData || updateData.length === 0) {
+        console.log('Update result:', { updateData, updateError });
+
+        if (updateError) {
+          console.log('Update error, attempting insert...');
           // Insert new configuration
           const { data: insertData, error: insertError } = await supabase
             .from('email_configurations')
             .insert(configData)
             .select();
 
+          console.log('Insert result:', { insertData, insertError });
+
           if (insertError) {
+            console.error('Insert error details:', insertError);
+            throw new Error(`Failed to save email configuration: ${insertError.message}`);
+          }
+
+          await sendDiscordLog('event', 'Email configuration created', { userId }, 'info');
+        } else if (!updateData || updateData.length === 0) {
+          console.log('No rows updated, attempting insert...');
+          // Insert new configuration
+          const { data: insertData, error: insertError } = await supabase
+            .from('email_configurations')
+            .insert(configData)
+            .select();
+
+          console.log('Insert result:', { insertData, insertError });
+
+          if (insertError) {
+            console.error('Insert error details:', insertError);
             throw new Error(`Failed to save email configuration: ${insertError.message}`);
           }
 
           await sendDiscordLog('event', 'Email configuration created', { userId }, 'info');
         } else {
+          console.log('Update successful');
           await sendDiscordLog('event', 'Email configuration updated', { userId }, 'info');
         }
 
