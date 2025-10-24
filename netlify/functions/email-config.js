@@ -259,6 +259,7 @@ export const handler = async (event, context) => {
 
       case 'POST':
       case 'PUT':
+      case 'SAVE':
         console.log('Saving email configuration for user:', userId);
         console.log('Email config data:', emailConfig);
         
