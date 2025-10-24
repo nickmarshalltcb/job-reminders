@@ -214,33 +214,7 @@ export const handler = async (event, context) => {
 
     const userId = user.id;
 
-    // Check if email_configurations table exists, create if it doesn't
-    try {
-      console.log('Checking if email_configurations table exists...');
-      const { data: tableCheck, error: tableError } = await supabase
-        .from('email_configurations')
-        .select('id')
-        .limit(1);
-      
-      if (tableError && tableError.code === '42P01') {
-        console.log('Table does not exist, creating it...');
-        // Table doesn't exist, we need to create it
-        // This would normally be done via Supabase dashboard or migration
-        console.error('email_configurations table does not exist. Please create it using the SQL in setup-database.sql');
-        return {
-          statusCode: 500,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ 
-            error: 'Database table not found. Please contact administrator to set up email_configurations table.' 
-          })
-        };
-      }
-    } catch (error) {
-      console.error('Error checking table existence:', error);
-    }
+    // Skip table existence check - let the actual operations handle table errors
 
     switch (method) {
       case 'GET':
@@ -252,6 +226,20 @@ export const handler = async (event, context) => {
           .single();
 
         if (getError && getError.code !== 'PGRST116') { // PGRST116 = no rows found
+          if (getError.code === '42P01') {
+            // Table doesn't exist
+            return {
+              statusCode: 500,
+              headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ 
+                error: 'Database table not found. Please create the email_configurations table in Supabase.',
+                code: 'TABLE_NOT_FOUND'
+              })
+            };
+          }
           throw new Error(`Failed to get email configuration: ${getError.message}`);
         }
 
@@ -307,6 +295,21 @@ export const handler = async (event, context) => {
         console.log('Update result:', { updateData, updateError });
 
         if (updateError) {
+          if (updateError.code === '42P01') {
+            // Table doesn't exist
+            return {
+              statusCode: 500,
+              headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ 
+                error: 'Database table not found. Please create the email_configurations table in Supabase.',
+                code: 'TABLE_NOT_FOUND'
+              })
+            };
+          }
+          
           console.log('Update error, attempting insert...');
           // Insert new configuration
           const { data: insertData, error: insertError } = await supabase
@@ -317,6 +320,20 @@ export const handler = async (event, context) => {
           console.log('Insert result:', { insertData, insertError });
 
           if (insertError) {
+            if (insertError.code === '42P01') {
+              // Table doesn't exist
+              return {
+                statusCode: 500,
+                headers: {
+                  'Access-Control-Allow-Origin': '*',
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 
+                  error: 'Database table not found. Please create the email_configurations table in Supabase.',
+                  code: 'TABLE_NOT_FOUND'
+                })
+              };
+            }
             console.error('Insert error details:', insertError);
             throw new Error(`Failed to save email configuration: ${insertError.message}`);
           }
@@ -333,6 +350,20 @@ export const handler = async (event, context) => {
           console.log('Insert result:', { insertData, insertError });
 
           if (insertError) {
+            if (insertError.code === '42P01') {
+              // Table doesn't exist
+              return {
+                statusCode: 500,
+                headers: {
+                  'Access-Control-Allow-Origin': '*',
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 
+                  error: 'Database table not found. Please create the email_configurations table in Supabase.',
+                  code: 'TABLE_NOT_FOUND'
+                })
+              };
+            }
             console.error('Insert error details:', insertError);
             throw new Error(`Failed to save email configuration: ${insertError.message}`);
           }
