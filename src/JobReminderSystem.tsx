@@ -91,6 +91,36 @@ const JobReminderSystem = () => {
     type: 'success'
   });
   const [showQuickActions, setShowQuickActions] = useState(false);
+  const [isEmailConfigLoading, setIsEmailConfigLoading] = useState(false);
+  const [isEmailConfigSaving, setIsEmailConfigSaving] = useState(false);
+  const [emailConfigErrors, setEmailConfigErrors] = useState({
+    toEmail: '',
+    fromEmail: '',
+    fromPassword: ''
+  });
+  
+  // Loading states for all async operations
+  const [loadingStates, setLoadingStates] = useState({
+    signIn: false,
+    signUp: false,
+    signOut: false,
+    loadJobs: false,
+    saveEmailConfig: false,
+    sendTestEmail: false,
+    checkReminders: false,
+    checkMissedReminders: false,
+    sendEmailReminder: false,
+    deleteJob: false,
+    snoozeReminder: false,
+    markAsComplete: false,
+    exportData: false,
+    pasteJobs: false
+  });
+
+  // Helper function to update loading states
+  const setLoading = (key: keyof typeof loadingStates, value: boolean) => {
+    setLoadingStates(prev => ({ ...prev, [key]: value }));
+  };
 
   // Enterprise Tooltip Component with Smart Positioning
   const Tooltip = ({ children, content, id, position = 'top' }: { children: React.ReactNode; content: string; id: string; position?: 'top' | 'bottom' }) => {
@@ -163,6 +193,7 @@ const JobReminderSystem = () => {
 
   const handleSignIn = async () => {
     try {
+      setLoading('signIn', true);
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       showAlert('Login successful', 'success');
@@ -170,11 +201,14 @@ const JobReminderSystem = () => {
     } catch (error) {
       showAlert(error.error_description || error.message, 'error');
       await logAuthEvent('sign in', false, { email, error: error.message });
+    } finally {
+      setLoading('signIn', false);
     }
   };
 
   const handleSignUp = async () => {
     try {
+      setLoading('signUp', true);
       const { error } = await supabase.auth.signUp({ email, password });
       if (error) throw error;
       showAlert('Check your email for the confirmation link!', 'success');
@@ -182,11 +216,14 @@ const JobReminderSystem = () => {
     } catch (error) {
       showAlert(error.error_description || error.message, 'error');
       await logAuthEvent('sign up', false, { email, error: error.message });
+    } finally {
+      setLoading('signUp', false);
     }
   };
 
   const handleSignOut = async () => {
     try {
+      setLoading('signOut', true);
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
       showAlert('Logged out successfully', 'success');
@@ -194,11 +231,14 @@ const JobReminderSystem = () => {
     } catch (error) {
       showAlert(error.error_description || error.message, 'error');
       await logAuthEvent('sign out', false, { email: session?.user?.email, error: error.message });
+    } finally {
+      setLoading('signOut', false);
     }
   };
 
   const loadJobs = async () => {
     setIsLoading(true);
+    setLoading('loadJobs', true);
     try {
       const { data, error } = await supabase
         .from('jobs')
@@ -227,13 +267,49 @@ const JobReminderSystem = () => {
       await logSystemError(error, { operation: 'loadJobs' });
     } finally {
       setIsLoading(false);
+      setLoading('loadJobs', false);
     }
+  };
+
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const validateEmailConfig = () => {
+    const errors = {
+      toEmail: '',
+      fromEmail: '',
+      fromPassword: ''
+    };
+
+    if (!emailConfig.toEmail) {
+      errors.toEmail = 'Recipient email is required';
+    } else if (!validateEmail(emailConfig.toEmail)) {
+      errors.toEmail = 'Please enter a valid email address';
+    }
+
+    if (!emailConfig.fromEmail) {
+      errors.fromEmail = 'Sender email is required';
+    } else if (!validateEmail(emailConfig.fromEmail)) {
+      errors.fromEmail = 'Please enter a valid email address';
+    }
+
+    if (!emailConfig.fromPassword) {
+      errors.fromPassword = 'App password is required';
+    } else if (emailConfig.fromPassword.length < 8) {
+      errors.fromPassword = 'App password must be at least 8 characters';
+    }
+
+    setEmailConfigErrors(errors);
+    return !Object.values(errors).some(error => error !== '');
   };
 
   const loadEmailConfig = async () => {
     try {
       if (!session?.access_token) return;
       
+      setIsEmailConfigLoading(true);
       const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/email-config`, {
         method: 'POST',
         headers: {
@@ -255,23 +331,33 @@ const JobReminderSystem = () => {
             configured: result.emailConfig.configured
           });
         }
+      } else {
+        // If table doesn't exist, that's okay - user hasn't configured email yet
+        console.log('Email configuration not found - user needs to set it up');
       }
     } catch (error) {
       console.error('Error loading email config:', error);
+      // Don't show error to user if table doesn't exist yet
+    } finally {
+      setIsEmailConfigLoading(false);
     }
   };
 
   const saveEmailConfig = async () => {
     try {
-      if (!emailConfig.toEmail || !emailConfig.fromEmail || !emailConfig.fromPassword) {
-        showAlert('Please fill in all email configuration fields', 'warning');
+      if (!validateEmailConfig()) {
+        showAlert('Please fix the validation errors before saving', 'warning');
         return;
       }
       
       if (!session?.access_token) {
-        showAlert('You must be logged in to save email configuration', 'error');
+        showAlert('You must be logged in to save email configuration', 'warning');
         return;
       }
+
+      setIsEmailConfigSaving(true);
+      setLoading('saveEmailConfig', true);
+      setEmailConfigErrors({ toEmail: '', fromEmail: '', fromPassword: '' });
 
       const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/email-config`, {
         method: 'POST',
@@ -280,25 +366,36 @@ const JobReminderSystem = () => {
           'Authorization': `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
-          method: 'POST',
-          email_config: {
-            toEmail: emailConfig.toEmail,
-            fromEmail: emailConfig.fromEmail,
-            fromPassword: emailConfig.fromPassword,
-            configured: emailConfig.configured
+          method: 'SAVE',
+          emailConfig: {
+            to_email: emailConfig.toEmail,
+            from_email: emailConfig.fromEmail,
+            from_password: emailConfig.fromPassword,
+            configured: true
           }
         })
       });
 
       if (response.ok) {
-        showAlert('Email configuration saved successfully', 'success');
-        await logEvent('Email configuration saved', { configured: emailConfig.configured }, 'info');
+        const result = await response.json();
+        if (result.success) {
+          setEmailConfig(prev => ({ ...prev, configured: true }));
+          showAlert('Email configuration saved successfully!', 'success');
+          await logEmailOperation('save configuration', { configured: true });
+        } else {
+          showAlert(result.error || 'Failed to save email configuration', 'error');
+        }
       } else {
-        throw new Error('Failed to save email configuration');
+        const errorResult = await response.json();
+        showAlert(errorResult.error || 'Failed to save email configuration', 'error');
       }
     } catch (error) {
+      console.error('Error saving email config:', error);
       showAlert('Failed to save email configuration', 'error');
-      await logError('Failed to save email configuration', { error: error.message }, 'error');
+      await logEmailOperation('save configuration', { error: error.message }, false);
+    } finally {
+      setIsEmailConfigSaving(false);
+      setLoading('saveEmailConfig', false);
     }
   };
 
@@ -308,9 +405,10 @@ const JobReminderSystem = () => {
       return;
     }
 
-    showAlert('Sending test email...', 'success');
-
     try {
+      setLoading('sendTestEmail', true);
+      showAlert('Sending test email...', 'success');
+
       // Create a test job
       const testJob = {
         id: 1,
@@ -320,7 +418,6 @@ const JobReminderSystem = () => {
         productionDeadline: new Date().toISOString().split('T')[0],
         status: 'In Production'
       };
-
 
       const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/send-reminder`, {
         method: 'POST',
@@ -346,58 +443,65 @@ const JobReminderSystem = () => {
     } catch (error) {
       showAlert(`Failed to send test email: ${error.message}`, 'error');
       await logEmailOperation('send test email', { error: error.message }, false);
+    } finally {
+      setLoading('sendTestEmail', false);
     }
   };
 
   const checkReminders = async () => {
-    const pkTime = getPakistanTime();
-    const hour = pkTime.getHours();
-    const minute = pkTime.getMinutes();
+    try {
+      setLoading('checkReminders', true);
+      const pkTime = getPakistanTime();
+      const hour = pkTime.getHours();
+      const minute = pkTime.getMinutes();
 
-    // Check at 9:00 AM PKT (with some tolerance for timing issues)
-    if (hour === 9 && minute >= 0 && minute <= 4) {
-      const today = new Date(pkTime.toDateString());
-      today.setHours(0, 0, 0, 0);
+      // Check at 9:00 AM PKT (with some tolerance for timing issues)
+      if (hour === 9 && minute >= 0 && minute <= 4) {
+        const today = new Date(pkTime.toDateString());
+        today.setHours(0, 0, 0, 0);
 
-      // Group jobs by due date for bundling
-      const jobsByDate = new Map<string, Job[]>();
+        // Group jobs by due date for bundling
+        const jobsByDate = new Map<string, Job[]>();
 
-      for (const job of jobs) {
-        if (job.status === 'Completed') continue;
+        for (const job of jobs) {
+          if (job.status === 'Completed') continue;
 
-        // Parse deadline using Pakistan timezone
-        const deadlineDate = new Date(job.productionDeadline + 'T00:00:00+05:00');
-        deadlineDate.setHours(0, 0, 0, 0);
-        
-        const snoozedUntil = job.snoozedUntil ? new Date(job.snoozedUntil + 'T00:00:00+05:00') : null;
-        if (snoozedUntil) {
-          snoozedUntil.setHours(0, 0, 0, 0);
-        }
-
-        const shouldRemindFromSnooze = snoozedUntil && snoozedUntil.toDateString() === today.toDateString();
-        const isDeadlineToday = deadlineDate.toDateString() === today.toDateString() && !job.reminderSent;
-
-        if (shouldRemindFromSnooze || isDeadlineToday) {
-          const dateKey = shouldRemindFromSnooze ? snoozedUntil!.toDateString() : deadlineDate.toDateString();
+          // Parse deadline using Pakistan timezone
+          const deadlineDate = new Date(job.productionDeadline + 'T00:00:00+05:00');
+          deadlineDate.setHours(0, 0, 0, 0);
           
-          if (!jobsByDate.has(dateKey)) {
-            jobsByDate.set(dateKey, []);
+          const snoozedUntil = job.snoozedUntil ? new Date(job.snoozedUntil + 'T00:00:00+05:00') : null;
+          if (snoozedUntil) {
+            snoozedUntil.setHours(0, 0, 0, 0);
           }
-          jobsByDate.get(dateKey)!.push(job);
-        }
-      }
 
-      // Send bundled emails
-      for (const [dateKey, jobsForDate] of jobsByDate) {
-        if (jobsForDate.length > 0) {
-          await sendEmailReminder(jobsForDate);
-          await logReminderOperation('send scheduled reminders', { 
-            jobCount: jobsForDate.length,
-            dateKey,
-            jobNumbers: jobsForDate.map(j => j.jobNumber)
-          }, true);
+          const shouldRemindFromSnooze = snoozedUntil && snoozedUntil.toDateString() === today.toDateString();
+          const isDeadlineToday = deadlineDate.toDateString() === today.toDateString() && !job.reminderSent;
+
+          if (shouldRemindFromSnooze || isDeadlineToday) {
+            const dateKey = shouldRemindFromSnooze ? snoozedUntil!.toDateString() : deadlineDate.toDateString();
+            
+            if (!jobsByDate.has(dateKey)) {
+              jobsByDate.set(dateKey, []);
+            }
+            jobsByDate.get(dateKey)!.push(job);
+          }
+        }
+
+        // Send bundled emails
+        for (const [dateKey, jobsForDate] of jobsByDate) {
+          if (jobsForDate.length > 0) {
+            await sendEmailReminder(jobsForDate);
+            await logReminderOperation('send scheduled reminders', { 
+              jobCount: jobsForDate.length,
+              dateKey,
+              jobNumbers: jobsForDate.map(j => j.jobNumber)
+            }, true);
+          }
         }
       }
+    } finally {
+      setLoading('checkReminders', false);
     }
   };
 
@@ -407,6 +511,7 @@ const JobReminderSystem = () => {
     }
 
     try {
+      setLoading('checkMissedReminders', true);
       const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/check-missed-reminders`, {
         method: 'POST',
         headers: {
@@ -429,6 +534,8 @@ const JobReminderSystem = () => {
     } catch (error) {
       console.error('Error checking missed reminders:', error);
       await logReminderOperation('check missed reminders', { error: error.message }, false);
+    } finally {
+      setLoading('checkMissedReminders', false);
     }
   };
 
@@ -438,6 +545,7 @@ const JobReminderSystem = () => {
     }
 
     try {
+      setLoading('sendEmailReminder', true);
       const jobList = Array.isArray(jobs) ? jobs : [jobs];
       
       // Send email via Netlify Function
@@ -484,6 +592,8 @@ const JobReminderSystem = () => {
         jobCount: Array.isArray(jobs) ? jobs.length : 1, 
         error: error.message 
       }, false);
+    } finally {
+      setLoading('sendEmailReminder', false);
     }
   };
 
@@ -567,6 +677,7 @@ const JobReminderSystem = () => {
     const pastedText = e.clipboardData.getData('text');
 
     try {
+      setLoading('pasteJobs', true);
       const parsedJobs = parseJobData(pastedText);
 
       const dbJobs = parsedJobs.map(job => ({
@@ -599,6 +710,8 @@ const JobReminderSystem = () => {
       console.error('Error adding jobs:', error);
       showAlert(error.message, 'error');
       await logJobOperation('bulk insert', { error: error.message }, false);
+    } finally {
+      setLoading('pasteJobs', false);
     }
   };
 
@@ -615,6 +728,7 @@ const JobReminderSystem = () => {
 
   const deleteJob = async (jobNumber: string) => {
     try {
+      setLoading('deleteJob', true);
       const { error } = await supabase
         .from('jobs')
         .delete()
@@ -629,6 +743,8 @@ const JobReminderSystem = () => {
       console.error('Error deleting job:', error);
       showAlert('Failed to delete job', 'error');
       await logJobOperation('delete', { jobNumber, error: error.message }, false);
+    } finally {
+      setLoading('deleteJob', false);
     }
   };
 
@@ -639,6 +755,7 @@ const JobReminderSystem = () => {
     snoozeDate.setHours(0, 0, 0, 0);
 
     try {
+      setLoading('snoozeReminder', true);
       const { error } = await supabase
         .from('jobs')
         .update({
@@ -656,11 +773,14 @@ const JobReminderSystem = () => {
     } catch (error) {
       console.error('Error snoozing reminder:', error);
       showAlert('Failed to snooze reminder', 'error');
+    } finally {
+      setLoading('snoozeReminder', false);
     }
   };
 
   const markAsComplete = async (job: Job) => {
     try {
+      setLoading('markAsComplete', true);
       const { error } = await supabase
         .from('jobs')
         .update({ status: 'Completed' })
@@ -675,11 +795,14 @@ const JobReminderSystem = () => {
       console.error('Error marking job complete:', error);
       showAlert('Failed to mark job as complete', 'error');
       await logJobOperation('mark complete', { jobNumber: job.jobNumber, error: error.message }, false);
+    } finally {
+      setLoading('markAsComplete', false);
     }
   };
 
   const exportData = async () => {
     try {
+      setLoading('exportData', true);
       const { data, error } = await supabase.from('jobs').select('*');
       if (error) throw error;
 
@@ -697,6 +820,8 @@ const JobReminderSystem = () => {
     } catch (error) {
       console.error('Error exporting data:', error);
       showAlert('Failed to export data', 'error');
+    } finally {
+      setLoading('exportData', false);
     }
   };
 
@@ -996,9 +1121,13 @@ const JobReminderSystem = () => {
           <div className="mt-6">
             <button
               onClick={handleSignIn}
-              className="w-full py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-all duration-200 shadow-lg hover:shadow-xl"
+              disabled={loadingStates.signIn}
+              className="w-full py-3 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
             >
-              Sign In
+              {loadingStates.signIn && (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+              )}
+              {loadingStates.signIn ? 'Signing In...' : 'Sign In'}
             </button>
           </div>
         </div>
@@ -1531,18 +1660,19 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
 
         {/* Pagination */}
         {filteredJobs.length > itemsPerPage && (
-          <div className="flex items-center justify-between px-6 py-4 bg-slate-900 rounded-xl border border-slate-800 mt-6 shadow-xl">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-400">
-                Showing {startIndex + 1} to {Math.min(endIndex, filteredJobs.length)} of {filteredJobs.length} jobs
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
+          <div className="bg-slate-900 rounded-xl border border-slate-800 mt-6 shadow-xl">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 px-4 sm:px-6 py-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xs sm:text-sm text-slate-400">
+                  Showing {startIndex + 1} to {Math.min(endIndex, filteredJobs.length)} of {filteredJobs.length} jobs
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-1 sm:gap-2">
               {/* First Page */}
               <button
                 onClick={() => setCurrentPage(1)}
                 disabled={currentPage === 1}
-                className="px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                className="px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
                 title="First page"
               >
                 ««
@@ -1552,9 +1682,10 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
               <button
                 onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
                 disabled={currentPage === 1}
-                className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                className="px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
               >
-                Previous
+                <span className="hidden sm:inline">Previous</span>
+                <span className="sm:hidden">Prev</span>
               </button>
               
               {/* Page Numbers */}
@@ -1575,7 +1706,7 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                     <button
                       key={pageNum}
                       onClick={() => setCurrentPage(pageNum)}
-                      className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                      className={`px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                         currentPage === pageNum 
                           ? 'bg-blue-600 text-white shadow-lg' 
                           : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
@@ -1591,23 +1722,25 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
               <button
                 onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
                 disabled={currentPage === totalPages}
-                className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                className="px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
               >
-                Next
+                <span className="hidden sm:inline">Next</span>
+                <span className="sm:hidden">Next</span>
               </button>
               
               {/* Last Page */}
               <button
                 onClick={() => setCurrentPage(totalPages)}
                 disabled={currentPage === totalPages}
-                className="px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                className="px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
                 title="Last page"
               >
                 »»
               </button>
+              </div>
               
-              {/* Jump to Page */}
-              <div className="flex items-center gap-2 ml-4 pl-4 border-l border-slate-700">
+              {/* Jump to Page - Hidden on mobile */}
+              <div className="hidden sm:flex items-center gap-2 mt-4 sm:mt-0 sm:ml-4 sm:pl-4 sm:border-l sm:border-slate-700">
                 <span className="text-sm text-slate-400">Go to:</span>
                 <input
                   type="number"
@@ -1728,10 +1861,26 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                     type="email"
                     placeholder="recipient@example.com"
                     value={emailConfig.toEmail}
-                    onChange={(e) => setEmailConfig({ ...emailConfig, toEmail: e.target.value })}
-                    className="w-full px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                    onChange={(e) => {
+                      setEmailConfig({ ...emailConfig, toEmail: e.target.value });
+                      if (emailConfigErrors.toEmail) {
+                        setEmailConfigErrors(prev => ({ ...prev, toEmail: '' }));
+                      }
+                    }}
+                    className={`w-full px-4 py-3 rounded-lg bg-slate-800 border text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:border-transparent transition-all duration-200 ${
+                      emailConfigErrors.toEmail 
+                        ? 'border-red-500 focus:ring-red-500' 
+                        : 'border-slate-700 focus:ring-blue-500'
+                    }`}
                   />
-                  <p className="text-xs text-slate-500 mt-2">Email address that will receive reminder notifications</p>
+                  {emailConfigErrors.toEmail ? (
+                    <p className="text-xs text-red-400 mt-2 flex items-center gap-1">
+                      <span>⚠</span>
+                      {emailConfigErrors.toEmail}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-500 mt-2">Email address that will receive reminder notifications</p>
+                  )}
                 </div>
                 
                 <div>
@@ -1745,10 +1894,26 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                     type="email"
                     placeholder="your-email@gmail.com"
                     value={emailConfig.fromEmail}
-                    onChange={(e) => setEmailConfig({ ...emailConfig, fromEmail: e.target.value })}
-                    className="w-full px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                    onChange={(e) => {
+                      setEmailConfig({ ...emailConfig, fromEmail: e.target.value });
+                      if (emailConfigErrors.fromEmail) {
+                        setEmailConfigErrors(prev => ({ ...prev, fromEmail: '' }));
+                      }
+                    }}
+                    className={`w-full px-4 py-3 rounded-lg bg-slate-800 border text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:border-transparent transition-all duration-200 ${
+                      emailConfigErrors.fromEmail 
+                        ? 'border-red-500 focus:ring-red-500' 
+                        : 'border-slate-700 focus:ring-blue-500'
+                    }`}
                   />
-                  <p className="text-xs text-slate-500 mt-2">Gmail address used to send notifications</p>
+                  {emailConfigErrors.fromEmail ? (
+                    <p className="text-xs text-red-400 mt-2 flex items-center gap-1">
+                      <span>⚠</span>
+                      {emailConfigErrors.fromEmail}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-500 mt-2">Gmail address used to send notifications</p>
+                  )}
                 </div>
 
                 <div>
@@ -1762,9 +1927,26 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                     type="password"
                     placeholder="Enter Gmail app password"
                     value={emailConfig.fromPassword}
-                    onChange={(e) => setEmailConfig({ ...emailConfig, fromPassword: e.target.value })}
-                    className="w-full px-4 py-3 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                    onChange={(e) => {
+                      setEmailConfig({ ...emailConfig, fromPassword: e.target.value });
+                      if (emailConfigErrors.fromPassword) {
+                        setEmailConfigErrors(prev => ({ ...prev, fromPassword: '' }));
+                      }
+                    }}
+                    className={`w-full px-4 py-3 rounded-lg bg-slate-800 border text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:border-transparent transition-all duration-200 ${
+                      emailConfigErrors.fromPassword 
+                        ? 'border-red-500 focus:ring-red-500' 
+                        : 'border-slate-700 focus:ring-blue-500'
+                    }`}
                   />
+                  {emailConfigErrors.fromPassword ? (
+                    <p className="text-xs text-red-400 mt-2 flex items-center gap-1">
+                      <span>⚠</span>
+                      {emailConfigErrors.fromPassword}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-500 mt-2">Gmail app password for authentication</p>
+                  )}
                   <p className="text-xs text-slate-500 mt-2">
                     <a 
                       href="https://support.google.com/accounts/answer/185833" 
@@ -1800,10 +1982,15 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                 <div className="flex items-center gap-3">
                   <button
                     onClick={saveEmailConfig}
-                    className="flex-1 px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
+                    disabled={isEmailConfigSaving}
+                    className="flex-1 px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
                   >
-                    <FaCheckCircle className="w-4 h-4" />
-                    Save Configuration
+                    {isEmailConfigSaving ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      <FaCheckCircle className="w-4 h-4" />
+                    )}
+                    {isEmailConfigSaving ? 'Saving...' : 'Save Configuration'}
                   </button>
                   <button
                     onClick={() => setShowSettings(false)}
