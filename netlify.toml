@@ -23,3 +23,7 @@
 # Go to Site settings > Functions > Scheduled functions
 # Function: scheduled-reminders
 # Schedule: 0 4 * * * (Daily at 4:00 AM UTC / 9:00 AM PKT)
+
+# Auto reminder check - runs every 5 minutes
+# Function: auto-reminder-check
+# Schedule: */5 * * * * (Every 5 minutes)
