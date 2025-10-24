@@ -1,4 +1,4 @@
-import JobReminderSystem from '../job_reminder_system'
+import JobReminderSystem from './JobReminderSystem.tsx'
 import ErrorBoundary from './ErrorBoundary'
 
 function App() {

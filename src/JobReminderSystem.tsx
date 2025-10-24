@@ -28,7 +28,18 @@ import {
   FaPause,
   FaRedo,
 } from 'react-icons/fa';
-import { supabase } from './src/supabaseClient';
+import { supabase } from './supabaseClient';
+import { 
+  logEvent, 
+  logError, 
+  logSystemStartup, 
+  logAuthEvent, 
+  logJobOperation, 
+  logEmailOperation, 
+  logReminderOperation, 
+  logSystemError, 
+  logCriticalError 
+} from './utils/discordLogger.js';
 
 interface Job {
   id: number;
@@ -127,8 +138,10 @@ const JobReminderSystem = () => {
   useEffect(() => {
     if (session) {
       loadJobs();
-      loadEmailConfig();
+      loadEmailConfig(); // Now async
       checkReminders();
+      checkMissedReminders(); // Check for missed reminders on startup
+      logSystemStartup(); // Log system startup
       const interval = setInterval(checkReminders, 300000); // Check every 5 minutes
       return () => clearInterval(interval);
     }
@@ -153,8 +166,10 @@ const JobReminderSystem = () => {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       showAlert('Login successful', 'success');
+      await logAuthEvent('sign in', true, { email });
     } catch (error) {
       showAlert(error.error_description || error.message, 'error');
+      await logAuthEvent('sign in', false, { email, error: error.message });
     }
   };
 
@@ -163,8 +178,10 @@ const JobReminderSystem = () => {
       const { error } = await supabase.auth.signUp({ email, password });
       if (error) throw error;
       showAlert('Check your email for the confirmation link!', 'success');
+      await logAuthEvent('sign up', true, { email });
     } catch (error) {
       showAlert(error.error_description || error.message, 'error');
+      await logAuthEvent('sign up', false, { email, error: error.message });
     }
   };
 
@@ -173,8 +190,10 @@ const JobReminderSystem = () => {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
       showAlert('Logged out successfully', 'success');
+      await logAuthEvent('sign out', true, { email: session?.user?.email });
     } catch (error) {
       showAlert(error.error_description || error.message, 'error');
+      await logAuthEvent('sign out', false, { email: session?.user?.email, error: error.message });
     }
   };
 
@@ -205,31 +224,81 @@ const JobReminderSystem = () => {
     } catch (error) {
       console.error('Error loading jobs:', error);
       showAlert('Failed to load jobs', 'error');
+      await logSystemError(error, { operation: 'loadJobs' });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const loadEmailConfig = () => {
+  const loadEmailConfig = async () => {
     try {
-      const result = localStorage.getItem('email-config');
-      if (result) {
-        setEmailConfig(JSON.parse(result));
+      if (!session?.access_token) return;
+      
+      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/email-config`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          method: 'GET'
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.emailConfig) {
+          setEmailConfig({
+            toEmail: result.emailConfig.to_email,
+            fromEmail: result.emailConfig.from_email,
+            fromPassword: result.emailConfig.from_password,
+            configured: result.emailConfig.configured
+          });
+        }
       }
     } catch (error) {
+      console.error('Error loading email config:', error);
     }
   };
 
-  const saveEmailConfig = () => {
+  const saveEmailConfig = async () => {
     try {
       if (!emailConfig.toEmail || !emailConfig.fromEmail || !emailConfig.fromPassword) {
         showAlert('Please fill in all email configuration fields', 'warning');
         return;
       }
-      localStorage.setItem('email-config', JSON.stringify(emailConfig));
-      showAlert('Email configuration saved successfully', 'success');
+      
+      if (!session?.access_token) {
+        showAlert('You must be logged in to save email configuration', 'error');
+        return;
+      }
+
+      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/email-config`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          method: 'POST',
+          email_config: {
+            toEmail: emailConfig.toEmail,
+            fromEmail: emailConfig.fromEmail,
+            fromPassword: emailConfig.fromPassword,
+            configured: emailConfig.configured
+          }
+        })
+      });
+
+      if (response.ok) {
+        showAlert('Email configuration saved successfully', 'success');
+        await logEvent('Email configuration saved', { configured: emailConfig.configured }, 'info');
+      } else {
+        throw new Error('Failed to save email configuration');
+      }
     } catch (error) {
       showAlert('Failed to save email configuration', 'error');
+      await logError('Failed to save email configuration', { error: error.message }, 'error');
     }
   };
 
@@ -273,8 +342,10 @@ const JobReminderSystem = () => {
       await response.json();
 
       showAlert('Test email sent successfully! Check your inbox.', 'success');
+      await logEmailOperation('send test email', { recipientCount: 1 }, true);
     } catch (error) {
       showAlert(`Failed to send test email: ${error.message}`, 'error');
+      await logEmailOperation('send test email', { error: error.message }, false);
     }
   };
 
@@ -320,8 +391,44 @@ const JobReminderSystem = () => {
       for (const [dateKey, jobsForDate] of jobsByDate) {
         if (jobsForDate.length > 0) {
           await sendEmailReminder(jobsForDate);
+          await logReminderOperation('send scheduled reminders', { 
+            jobCount: jobsForDate.length,
+            dateKey,
+            jobNumbers: jobsForDate.map(j => j.jobNumber)
+          }, true);
         }
       }
+    }
+  };
+
+  const checkMissedReminders = async () => {
+    if (!emailConfig.configured) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/check-missed-reminders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          emailConfig
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.missedCount > 0) {
+          await logReminderOperation('check missed reminders', { 
+            missedCount: result.missedCount,
+            sentCount: result.sentCount
+          }, true);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking missed reminders:', error);
+      await logReminderOperation('check missed reminders', { error: error.message }, false);
     }
   };
 
@@ -363,10 +470,20 @@ const JobReminderSystem = () => {
       }
 
       await loadJobs();
+      await logEmailOperation('send reminder', { 
+        jobCount: jobList.length, 
+        recipientCount: 1,
+        jobNumbers: jobList.map(j => j.jobNumber),
+        isBundled: jobList.length > 1
+      }, true);
       
     } catch (error) {
       console.error('Error sending email reminder:', error);
       showAlert('Failed to send email reminder', 'error');
+      await logEmailOperation('send reminder', { 
+        jobCount: Array.isArray(jobs) ? jobs.length : 1, 
+        error: error.message 
+      }, false);
     }
   };
 
@@ -477,9 +594,11 @@ const JobReminderSystem = () => {
       await loadJobs();
       setInputText('');
       showAlert(`Successfully added ${parsedJobs.length} job(s)`, 'success');
+      await logJobOperation('bulk insert', { jobCount: parsedJobs.length, jobNumbers: parsedJobs.map(j => j.jobNumber) }, true);
     } catch (error) {
       console.error('Error adding jobs:', error);
       showAlert(error.message, 'error');
+      await logJobOperation('bulk insert', { error: error.message }, false);
     }
   };
 
@@ -505,9 +624,11 @@ const JobReminderSystem = () => {
 
       await loadJobs();
       showAlert('Job deleted successfully', 'success');
+      await logJobOperation('delete', { jobNumber }, true);
     } catch (error) {
       console.error('Error deleting job:', error);
       showAlert('Failed to delete job', 'error');
+      await logJobOperation('delete', { jobNumber, error: error.message }, false);
     }
   };
 
@@ -549,9 +670,11 @@ const JobReminderSystem = () => {
 
       showAlert('Job marked as complete', 'success');
       await loadJobs();
+      await logJobOperation('mark complete', { jobNumber: job.jobNumber, clientName: job.clientName }, true);
     } catch (error) {
       console.error('Error marking job complete:', error);
       showAlert('Failed to mark job as complete', 'error');
+      await logJobOperation('mark complete', { jobNumber: job.jobNumber, error: error.message }, false);
     }
   };
 
@@ -887,23 +1010,23 @@ const JobReminderSystem = () => {
     <div className="min-h-screen bg-slate-950">
       {/* Enterprise Header */}
       <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40 shadow-xl">
-        <div className="max-w-[1600px] mx-auto px-6 py-4">
+        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-3 sm:py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center shadow-lg">
-                <FaBell className="w-6 h-6 text-white" />
+            <div className="flex items-center gap-2 sm:gap-4">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center shadow-lg">
+                <FaBell className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-slate-100">Flycast Technologies</h1>
-                <p className="text-sm text-slate-400">Reminder Dashboard</p>
-            </div>
+                <h1 className="text-lg sm:text-2xl font-bold text-slate-100">Flycast Technologies</h1>
+                <p className="text-xs sm:text-sm text-slate-400">Reminder Dashboard</p>
+              </div>
             </div>
             
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2">
               <Tooltip content="Export all job data as JSON file" id="export-btn" position="bottom">
               <button
                 onClick={exportData}
-                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center gap-2 text-sm font-medium border border-slate-700"
+                  className="p-2 sm:px-4 sm:py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center gap-2 text-sm font-medium border border-slate-700"
               >
                   <FaDownload className="w-4 h-4" />
                 <span className="hidden sm:inline">Export</span>
@@ -911,7 +1034,7 @@ const JobReminderSystem = () => {
               </Tooltip>
               
               <Tooltip content="Import job data from JSON file" id="import-btn" position="bottom">
-                <label className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center gap-2 text-sm font-medium cursor-pointer border border-slate-700">
+                <label className="p-2 sm:px-4 sm:py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center gap-2 text-sm font-medium cursor-pointer border border-slate-700">
                   <FaUpload className="w-4 h-4" />
                 <span className="hidden sm:inline">Import</span>
                 <input type="file" accept=".json" onChange={importData} className="hidden" />
@@ -921,7 +1044,7 @@ const JobReminderSystem = () => {
               <Tooltip content="Configure email settings for reminders" id="settings-btn" position="bottom">
               <button
                 onClick={() => setShowSettings(!showSettings)}
-                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center gap-2 text-sm font-medium border border-slate-700"
+                  className="p-2 sm:px-4 sm:py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center gap-2 text-sm font-medium border border-slate-700"
               >
                   <FaCog className="w-4 h-4" />
                 <span className="hidden sm:inline">Settings</span>
@@ -931,7 +1054,7 @@ const JobReminderSystem = () => {
               <Tooltip content="Sign out of your account" id="signout-btn" position="bottom">
               <button
                 onClick={handleSignOut}
-                  className="px-4 py-2 rounded-lg bg-red-900/50 hover:bg-red-900/70 text-red-300 transition-all duration-200 flex items-center gap-2 text-sm font-medium border border-red-800"
+                  className="p-2 sm:px-4 sm:py-2 rounded-lg bg-red-900/50 hover:bg-red-900/70 text-red-300 transition-all duration-200 flex items-center gap-2 text-sm font-medium border border-red-800"
               >
                   <FaLock className="w-4 h-4" />
                 <span className="hidden sm:inline">Sign Out</span>
@@ -942,26 +1065,26 @@ const JobReminderSystem = () => {
         </div>
       </header>
 
-      <div className="max-w-[1600px] mx-auto px-6 py-8">
+      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-4 sm:py-8">
         {/* Quick Actions Panel */}
-        <div className="mb-8">
-          <div className="bg-slate-900 rounded-xl border border-slate-800 p-6 shadow-xl">
-            <div className="flex items-center justify-between mb-6">
+        <div className="mb-6 sm:mb-8">
+          <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 sm:p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4 sm:mb-6">
               <div>
-                <h2 className="text-xl font-semibold text-slate-100 mb-2">Quick Actions</h2>
-                <p className="text-slate-400 text-sm">Manage jobs and configure system settings</p>
+                <h2 className="text-lg sm:text-xl font-semibold text-slate-100 mb-1 sm:mb-2">Quick Actions</h2>
+                <p className="text-slate-400 text-xs sm:text-sm">Manage jobs and configure system settings</p>
               </div>
             </div>
 
 
             {/* Job Data Input - Always Visible */}
-            <div className="bg-slate-800/50 rounded-lg p-6 border border-slate-700">
+            <div className="bg-slate-800/50 rounded-lg p-4 sm:p-6 border border-slate-700">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h3 className="text-lg font-semibold text-slate-100">Add New Jobs</h3>
-                  <p className="text-sm text-slate-400 mt-1">Paste tab-separated data from Excel or CSV</p>
+                  <h3 className="text-base sm:text-lg font-semibold text-slate-100">Add New Jobs</h3>
+                  <p className="text-xs sm:text-sm text-slate-400 mt-1">Paste tab-separated data from Excel or CSV</p>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-700">
+                <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-700">
                   <FaCalendarAlt className="w-3 h-3" />
                   <span>Ready to paste</span>
                 </div>
@@ -977,7 +1100,7 @@ Format: Job Number	Client Name	Forwarding Date	Production Deadline	Status
 Example: SP-192	Stefan Nestorovic	15-Oct-2025	24-Oct-2025	In Production
 
 Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
-                  className="w-full h-40 px-4 py-3 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 resize-none font-mono text-sm"
+                  className="w-full h-32 sm:h-40 px-4 py-3 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 resize-none font-mono text-xs sm:text-sm"
                 />
                 <div className="absolute top-3 right-3 flex items-center gap-2 text-xs text-slate-500 bg-slate-800 px-3 py-1.5 rounded border border-slate-700">
                   <FaPlus className="w-3 h-3" />
@@ -989,66 +1112,66 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
         </div>
 
         {/* Stats Dashboard */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <div className="bg-slate-900 rounded-xl p-6 border border-slate-800 shadow-xl hover:shadow-2xl hover:border-slate-700 transition-all duration-200">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6 mb-8">
+          <div className="bg-slate-900 rounded-xl p-3 sm:p-6 border border-slate-800 shadow-xl hover:shadow-2xl hover:border-slate-700 transition-all duration-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-slate-400 mb-2">Total Jobs</p>
-                <p className="text-4xl font-bold text-slate-100">{jobs.length}</p>
+                <p className="text-xs sm:text-sm font-medium text-slate-400 mb-1 sm:mb-2">Total Jobs</p>
+                <p className="text-2xl sm:text-4xl font-bold text-slate-100">{jobs.length}</p>
               </div>
-              <div className="w-14 h-14 rounded-lg bg-blue-600/20 flex items-center justify-center border border-blue-500/30">
-                <FaCalendarAlt className="w-7 h-7 text-blue-400" />
+              <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-lg bg-blue-600/20 flex items-center justify-center border border-blue-500/30">
+                <FaCalendarAlt className="w-5 h-5 sm:w-7 sm:h-7 text-blue-400" />
               </div>
             </div>
           </div>
           
-          <div className="bg-slate-900 rounded-xl p-6 border border-slate-800 shadow-xl hover:shadow-2xl hover:border-slate-700 transition-all duration-200">
+          <div className="bg-slate-900 rounded-xl p-3 sm:p-6 border border-slate-800 shadow-xl hover:shadow-2xl hover:border-slate-700 transition-all duration-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-slate-400 mb-2">In Production</p>
-                <p className="text-4xl font-bold text-cyan-400">
+                <p className="text-xs sm:text-sm font-medium text-slate-400 mb-1 sm:mb-2">In Production</p>
+                <p className="text-2xl sm:text-4xl font-bold text-cyan-400">
                   {jobs.filter(j => j.status === 'In Production').length}
                 </p>
               </div>
-              <div className="w-14 h-14 rounded-lg bg-cyan-600/20 flex items-center justify-center border border-cyan-500/30">
-                <FaPlay className="w-7 h-7 text-cyan-400" />
+              <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-lg bg-cyan-600/20 flex items-center justify-center border border-cyan-500/30">
+                <FaPlay className="w-5 h-5 sm:w-7 sm:h-7 text-cyan-400" />
               </div>
             </div>
           </div>
           
-          <div className="bg-slate-900 rounded-xl p-6 border border-slate-800 shadow-xl hover:shadow-2xl hover:border-slate-700 transition-all duration-200">
+          <div className="bg-slate-900 rounded-xl p-3 sm:p-6 border border-slate-800 shadow-xl hover:shadow-2xl hover:border-slate-700 transition-all duration-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-slate-400 mb-2">Due Today</p>
-                <p className="text-4xl font-bold text-orange-400">
+                <p className="text-xs sm:text-sm font-medium text-slate-400 mb-1 sm:mb-2">Due Today</p>
+                <p className="text-2xl sm:text-4xl font-bold text-orange-400">
                   {jobs.filter(j => j.status !== 'Completed' && getDaysUntilDeadline(j.productionDeadline, j.status) === 0).length}
                 </p>
               </div>
-              <div className="w-14 h-14 rounded-lg bg-orange-600/20 flex items-center justify-center border border-orange-500/30">
-                <FaClock className="w-7 h-7 text-orange-400" />
+              <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-lg bg-orange-600/20 flex items-center justify-center border border-orange-500/30">
+                <FaClock className="w-5 h-5 sm:w-7 sm:h-7 text-orange-400" />
               </div>
             </div>
           </div>
           
-          <div className="bg-slate-900 rounded-xl p-6 border border-slate-800 shadow-xl hover:shadow-2xl hover:border-slate-700 transition-all duration-200">
+          <div className="bg-slate-900 rounded-xl p-3 sm:p-6 border border-slate-800 shadow-xl hover:shadow-2xl hover:border-slate-700 transition-all duration-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-slate-400 mb-2">Completed</p>
-                <p className="text-4xl font-bold text-emerald-400">
+                <p className="text-xs sm:text-sm font-medium text-slate-400 mb-1 sm:mb-2">Completed</p>
+                <p className="text-2xl sm:text-4xl font-bold text-emerald-400">
                   {jobs.filter(j => j.status === 'Completed').length}
                 </p>
               </div>
-              <div className="w-14 h-14 rounded-lg bg-emerald-600/20 flex items-center justify-center border border-emerald-500/30">
-                <FaCheckCircle className="w-7 h-7 text-emerald-400" />
+              <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-lg bg-emerald-600/20 flex items-center justify-center border border-emerald-500/30">
+                <FaCheckCircle className="w-5 h-5 sm:w-7 sm:h-7 text-emerald-400" />
               </div>
             </div>
           </div>
         </div>
 
         {/* Search and Filter Bar */}
-        <div className="bg-slate-900 rounded-xl border border-slate-800 p-6 mb-8 shadow-xl">
-          <div className="flex gap-4 flex-wrap">
-            <div className="flex-1 min-w-64">
+        <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 sm:p-6 mb-8 shadow-xl">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1 min-w-0">
               <div className="relative">
                 <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
@@ -1056,7 +1179,7 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                   placeholder="Search by job number or client name..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-12 pr-12 py-3 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                  className="w-full pl-12 pr-12 py-3 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-sm sm:text-base"
                 />
                 {searchTerm && (
                   <button
@@ -1097,10 +1220,23 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
           </div>
         </div>
 
+              <style>{`
+                @media (max-width: 768px) {
+                  .mobile-table { display: block; }
+                  .mobile-table thead { display: none; }
+                  .mobile-table tbody { display: block; }
+                  .mobile-table tr { display: block; margin-bottom: 16px; padding: 16px; background: #1e293b; border-radius: 8px; }
+                  .mobile-table td { display: block; width: 100%; padding: 8px 0; border-bottom: 1px solid #374151; }
+                  .mobile-table td:last-child { border-bottom: none; }
+                  .mobile-table-label { font-weight: 600; color: #9ca3af; font-size: 12px; text-transform: uppercase; margin-bottom: 4px; }
+                  .mobile-table-value { color: #f1f5f9; font-size: 14px; }
+                  .mobile-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+                }
+              `}</style>
         {/* Jobs Table */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl overflow-visible">
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full mobile-table">
               <thead className="bg-slate-800/50 border-b border-slate-700">
                 <tr>
                   <th
@@ -1222,12 +1358,23 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                         className={`border-b border-slate-800 hover:bg-slate-800/50 transition-colors ${isCritical ? 'animate-pulse-red' : ''}`}
                       >
                         <td className="px-6 py-4">
+                          <div className="mobile-table-label md:hidden">Job Number</div>
                           <span className="font-semibold text-blue-400">{job.jobNumber}</span>
                         </td>
-                        <td className="px-6 py-4 text-slate-200">{job.clientName}</td>
-                        <td className="px-6 py-4 text-slate-300 text-sm">{formatDate(job.forwardingDate)}</td>
-                        <td className="px-6 py-4 text-slate-300 text-sm">{formatDate(job.productionDeadline)}</td>
+                        <td className="px-6 py-4 text-slate-200">
+                          <div className="mobile-table-label md:hidden">Client Name</div>
+                          <span className="mobile-table-value">{job.clientName}</span>
+                        </td>
+                        <td className="px-6 py-4 text-slate-300 text-sm">
+                          <div className="mobile-table-label md:hidden">Forwarding Date</div>
+                          <span className="mobile-table-value">{formatDate(job.forwardingDate)}</span>
+                        </td>
+                        <td className="px-6 py-4 text-slate-300 text-sm">
+                          <div className="mobile-table-label md:hidden">Production Deadline</div>
+                          <span className="mobile-table-value">{formatDate(job.productionDeadline)}</span>
+                        </td>
                         <td className="px-6 py-4">
+                          <div className="mobile-table-label md:hidden">Days Left</div>
                           {daysLeft !== null ? (
                             <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold ${
                               daysLeft < 0 ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
@@ -1243,12 +1390,14 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                           )}
                         </td>
                         <td className="px-6 py-4">
+                          <div className="mobile-table-label md:hidden">Status</div>
                           <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getStatusColor(job.status)}`}>
                             {job.status}
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          <div className="flex gap-2">
+                          <div className="mobile-table-label md:hidden">Actions</div>
+                          <div className="flex gap-2 mobile-actions md:flex-row">
                             {job.status !== 'Completed' ? (
                               <Tooltip content="Mark this job as completed" id={`complete-${job.jobNumber}`}>
                                 <button
@@ -1480,10 +1629,10 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
         )}
       </div>
 
-      {/* Toast Notification - Better Positioning */}
+      {/* Toast Notification - Highest Z-Index */}
       {notification.show && (
         <div 
-          className="fixed top-20 right-6 min-w-[320px] max-w-md px-5 py-4 rounded-xl shadow-2xl font-medium flex items-center gap-3 z-[100] transform transition-all duration-300 ease-in-out animate-slide-in-right border-l-4"
+          className="fixed top-20 right-6 min-w-[320px] max-w-md px-5 py-4 rounded-xl shadow-2xl font-medium flex items-center gap-3 z-[9999] transform transition-all duration-300 ease-in-out animate-slide-in-right border-l-4"
           style={{
             backgroundColor: notification.type === 'success' ? '#064e3b' :
               notification.type === 'error' ? '#7f1d1d' : '#78350f',
