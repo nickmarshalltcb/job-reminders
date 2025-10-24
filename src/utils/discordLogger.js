@@ -37,7 +37,7 @@ const debouncedLog = (key, logFunction, debounceTime = DEBOUNCE_TIME) => {
 export const sendDiscordLog = async (type, message, data = {}, level = 'info', useDebounce = false) => {
   const logFunction = async () => {
     try {
-      const response = await fetch('/.netlify/functions/discord-logger', {
+      const response = await fetch(`${window.location.protocol}//${window.location.hostname}:8888/.netlify/functions/discord-logger`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, message, data, level })
