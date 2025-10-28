@@ -1,0 +1,16 @@
+name: Scheduled Reminder Check
+
+on:
+  schedule:
+    # Run every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  trigger-reminder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Netlify Function
+        run: |
+          curl -X GET https://jobs-reminder.netlify.app/.netlify/functions/auto-reminder-check
+          echo "Reminder check triggered at $(date)"
