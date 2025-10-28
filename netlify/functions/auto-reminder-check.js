@@ -304,10 +304,21 @@ const sendEmailReminder = async (jobs, emailConfig) => {
 export const handler = async (event, context) => {
   try {
     console.log('Auto reminder check started');
-    
+
     const pkTime = getPakistanTime();
-    const today = new Date(pkTime.toDateString());
-    today.setHours(0, 0, 0, 0);
+    const currentHour = pkTime.getHours();
+    const currentMinute = pkTime.getMinutes();
+
+    // Check if it's 9:00 AM PKT (with 5-minute tolerance)
+    const isNineAM = currentHour === 9 && currentMinute <= 4;
+
+    // This function runs every 5 minutes and:
+    // 1. Always checks for OVERDUE jobs and sends immediately
+    // 2. At 9:00 AM PKT, also sends reminders for jobs due TODAY
+    console.log(`Reminder check running. Current time: ${currentHour}:${currentMinute} PKT. Is 9 AM: ${isNineAM}`);
+
+    console.log('✅ 9:00 AM PKT - Processing reminders...');
+    const now = new Date(); // Current UTC time
 
     // Get all users with email configurations
     const { data: emailConfigs, error: configError } = await supabase
@@ -336,8 +347,8 @@ export const handler = async (event, context) => {
           'Access-Control-Allow-Origin': '*',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
-          success: true, 
+        body: JSON.stringify({
+          success: true,
           message: 'No email configurations found',
           remindersSent: 0
         })
@@ -346,16 +357,19 @@ export const handler = async (event, context) => {
 
     let totalRemindersSent = 0;
     let totalUsersProcessed = 0;
+    const today = new Date(pkTime.toDateString());
+    today.setHours(0, 0, 0, 0);
 
     // Process each user's email configuration
     for (const emailConfig of emailConfigs) {
       try {
         // Get jobs for this user that need reminders
+        // Use new timestamp columns with fallback to old columns
         const { data: jobs, error: jobsError } = await supabase
           .from('jobs')
           .select('*')
-          .neq('status', 'Completed')
-          .eq('reminder_sent', false);
+          .eq('user_id', emailConfig.user_id)
+          .neq('status', 'Completed');
 
         if (jobsError) {
           console.error(`Error fetching jobs for user ${emailConfig.user_id}:`, jobsError);
@@ -366,73 +380,124 @@ export const handler = async (event, context) => {
           continue;
         }
 
-        // Find jobs that should have reminders sent today
+        // Find jobs that should have reminders sent now
         const jobsNeedingReminders = [];
-        
+
         for (const job of jobs) {
-          const deadlineDate = new Date(job.production_deadline + 'T00:00:00+05:00');
-          deadlineDate.setHours(0, 0, 0, 0);
-          
-          const snoozedUntil = job.snoozed_until ? new Date(job.snoozed_until + 'T00:00:00+05:00') : null;
-          if (snoozedUntil) {
-            snoozedUntil.setHours(0, 0, 0, 0);
+          // Check snooze expiry (priority over deadline)
+          if (job.snooze_expires_at) {
+            const snoozeExpiry = new Date(job.snooze_expires_at);
+            if (snoozeExpiry <= now) {
+              // Snooze has expired, send reminder immediately
+              console.log(`Job ${job.job_number} snooze expired at ${snoozeExpiry.toISOString()} - sending immediately`);
+              jobsNeedingReminders.push({ job, reason: 'snooze_expired', sendImmediately: true });
+              continue;
+            } else {
+              // Still snoozed, skip
+              console.log(`Skipping job ${job.job_number} - snoozed until ${snoozeExpiry.toISOString()}`);
+              continue;
+            }
           }
 
-          // Check if job is due today or overdue
-          const isDeadlineToday = deadlineDate.toDateString() === today.toDateString();
-          const isOverdue = deadlineDate < today;
-          const shouldRemindFromSnooze = snoozedUntil && snoozedUntil.toDateString() === today.toDateString();
+          // Check deadline
+          const deadlineDate = new Date(job.production_deadline + 'T00:00:00+05:00');
+          deadlineDate.setHours(0, 0, 0, 0);
 
-          if (isDeadlineToday || isOverdue || shouldRemindFromSnooze) {
-            jobsNeedingReminders.push(job);
+          const isDeadlineToday = deadlineDate.getTime() === today.getTime();
+          const isOverdue = deadlineDate < today;
+
+          // OVERDUE jobs: Send immediately regardless of time
+          if (isOverdue) {
+            // Check if reminder was already sent today for overdue jobs
+            if (job.last_reminder_sent_at) {
+              const lastSentDate = new Date(job.last_reminder_sent_at);
+              const lastSentPKT = new Date(lastSentDate.toLocaleString('en-US', { timeZone: 'Asia/Karachi' }));
+              const lastSentDay = new Date(lastSentPKT.toDateString());
+              lastSentDay.setHours(0, 0, 0, 0);
+
+              if (lastSentDay.getTime() === today.getTime()) {
+                console.log(`Skipping OVERDUE job ${job.job_number} - reminder already sent today at ${lastSentDate.toISOString()}`);
+                continue;
+              }
+            }
+
+            console.log(`Job ${job.job_number} is OVERDUE (deadline: ${job.production_deadline}) - sending immediately`);
+            jobsNeedingReminders.push({ job, reason: 'overdue', sendImmediately: true });
+            continue;
+          }
+
+          // Jobs DUE TODAY: Only send at 9:00 AM PKT
+          if (isDeadlineToday && isNineAM) {
+            // Check if reminder was already sent today
+            if (job.last_reminder_sent_at) {
+              const lastSentDate = new Date(job.last_reminder_sent_at);
+              const lastSentPKT = new Date(lastSentDate.toLocaleString('en-US', { timeZone: 'Asia/Karachi' }));
+              const lastSentDay = new Date(lastSentPKT.toDateString());
+              lastSentDay.setHours(0, 0, 0, 0);
+
+              if (lastSentDay.getTime() === today.getTime()) {
+                console.log(`Skipping job ${job.job_number} - reminder already sent today at ${lastSentDate.toISOString()}`);
+                continue;
+              }
+            }
+
+            console.log(`Job ${job.job_number} due today (deadline: ${job.production_deadline}) - sending at 9 AM`);
+            jobsNeedingReminders.push({ job, reason: 'due_today', sendImmediately: false });
           }
         }
 
         if (jobsNeedingReminders.length > 0) {
-          // Group jobs by date for bundling
-          const jobsByDate = new Map();
-          
-          for (const job of jobsNeedingReminders) {
-            const deadlineDate = new Date(job.production_deadline + 'T00:00:00+05:00');
-            deadlineDate.setHours(0, 0, 0, 0);
-            
-            const snoozedUntil = job.snoozed_until ? new Date(job.snoozed_until + 'T00:00:00+05:00') : null;
-            if (snoozedUntil) {
-              snoozedUntil.setHours(0, 0, 0, 0);
-            }
+          // Separate immediate and scheduled reminders
+          const immediateJobs = jobsNeedingReminders.filter(item => item.sendImmediately);
+          const scheduledJobs = jobsNeedingReminders.filter(item => !item.sendImmediately);
 
-            const dateKey = snoozedUntil ? snoozedUntil.toDateString() : deadlineDate.toDateString();
-            
-            if (!jobsByDate.has(dateKey)) {
-              jobsByDate.set(dateKey, []);
-            }
-            jobsByDate.get(dateKey).push(job);
-          }
+          // Extract job objects from wrapper
+          const jobsToSend = jobsNeedingReminders.map(item => item.job);
 
-          // Send reminders for each date
-          for (const [dateKey, jobsForDate] of jobsByDate) {
-            if (jobsForDate.length > 0) {
-              const emailSent = await sendEmailReminder(jobsForDate, emailConfig);
-              
-              if (emailSent) {
-                // Mark jobs as reminder sent
-                const jobIds = jobsForDate.map(job => job.id);
-                const { error: updateError } = await supabase
-                  .from('jobs')
-                  .update({ 
-                    reminder_sent: true,
-                    last_reminder_date: new Date().toISOString()
-                  })
-                  .in('id', jobIds);
+          console.log(`Sending bundled reminder for ${jobsToSend.length} jobs to ${emailConfig.toEmail} (${immediateJobs.length} immediate, ${scheduledJobs.length} scheduled)`);
 
-                if (updateError) {
-                  console.error('Error updating reminder status:', updateError);
-                } else {
-                  totalRemindersSent += jobsForDate.length;
-                  console.log(`Sent ${jobsForDate.length} reminders for date ${dateKey}`);
-                }
-              }
+          const emailSent = await sendEmailReminder(jobsToSend, emailConfig);
+
+          if (emailSent) {
+            // Mark jobs as reminder sent with current timestamp
+            const jobIds = jobsToSend.map(job => job.id);
+            const { error: updateError } = await supabase
+              .from('jobs')
+              .update({
+                reminder_sent: true,
+                last_reminder_sent_at: now.toISOString(),
+                last_reminder_date: now.toISOString().split('T')[0], // Keep for backward compatibility
+                snooze_expires_at: null, // Clear snooze since reminder was sent
+                snoozed_until: null // Clear legacy snooze field
+              })
+              .in('id', jobIds);
+
+            if (updateError) {
+              console.error('Error updating reminder status:', updateError);
+              await sendDiscordLog('error', 'Failed to update reminder status', {
+                error: updateError.message,
+                jobIds
+              }, 'error');
+            } else {
+              totalRemindersSent += jobsToSend.length;
+              console.log(`✅ Sent reminder for ${jobsToSend.length} jobs`);
+
+              await sendDiscordLog('event', 'Reminder sent successfully', {
+                userId: emailConfig.user_id,
+                userEmail: emailConfig.toEmail,
+                jobCount: jobsToSend.length,
+                immediateCount: immediateJobs.length,
+                scheduledCount: scheduledJobs.length,
+                jobNumbers: jobsToSend.map(j => j.job_number).join(', '),
+                reasons: jobsNeedingReminders.map(item => `${item.job.job_number}:${item.reason}`).join(', ')
+              }, 'info');
             }
+          } else {
+            await sendDiscordLog('error', 'Failed to send reminder email', {
+              userId: emailConfig.user_id,
+              userEmail: emailConfig.toEmail,
+              jobCount: jobsToSend.length
+            }, 'error');
           }
         }
 
@@ -443,11 +508,12 @@ export const handler = async (event, context) => {
       }
     }
 
-    await sendDiscordLog('event', 'Auto reminder check completed', {
+    await sendDiscordLog('event', '🔔 Auto reminder check completed', {
       totalUsersProcessed,
       totalRemindersSent,
-      timestamp: new Date().toISOString()
-    }, 'info');
+      timestamp: now.toISOString(),
+      pktTime: pkTime.toLocaleString('en-US', { timeZone: 'Asia/Karachi' })
+    }, totalRemindersSent > 0 ? 'info' : 'warning');
 
     return {
       statusCode: 200,
@@ -455,31 +521,32 @@ export const handler = async (event, context) => {
         'Access-Control-Allow-Origin': '*',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ 
-        success: true, 
-        message: 'Auto reminder check completed',
+      body: JSON.stringify({
+        success: true,
+        message: 'Auto reminder check completed at 9:00 AM PKT',
         totalUsersProcessed,
-        totalRemindersSent
+        totalRemindersSent,
+        pktTime: pkTime.toLocaleString('en-US', { timeZone: 'Asia/Karachi' })
       })
     };
 
   } catch (error) {
     console.error('Error in auto-reminder-check function:', error);
-    
-    await sendDiscordLog('error', 'Auto reminder check failed', {
+
+    await sendDiscordLog('error', '🚨 Auto reminder check failed', {
       error: error.message,
       stack: error.stack
     }, 'critical');
-    
+
     return {
       statusCode: 500,
       headers: {
         'Access-Control-Allow-Origin': '*',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         error: 'Internal server error',
-        details: error.message 
+        details: error.message
       })
     };
   }

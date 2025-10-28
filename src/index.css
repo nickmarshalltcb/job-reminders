@@ -130,4 +130,149 @@
   ::-webkit-scrollbar-thumb:hover {
     background: #64748b;
   }
+
+  /* Mobile-specific styles */
+  @media (max-width: 767px) {
+    /* Hide desktop table on mobile */
+    .desktop-table {
+      display: none;
+    }
+
+    /* Show mobile cards on mobile */
+    .mobile-cards {
+      display: block;
+    }
+
+    /* Improve touch targets - minimum 44x44px */
+    button {
+      min-height: 44px;
+      min-width: 44px;
+    }
+
+    /* Better spacing for mobile */
+    .mobile-padding {
+      padding-left: 1rem;
+      padding-right: 1rem;
+    }
+
+    /* Larger text for readability */
+    .mobile-text-base {
+      font-size: 1rem;
+    }
+
+    /* Full width modals on mobile */
+    .modal-content {
+      width: calc(100vw - 2rem);
+      max-width: none;
+      margin: 1rem;
+    }
+  }
+
+  @media (min-width: 768px) {
+    /* Show desktop table on desktop */
+    .desktop-table {
+      display: table;
+    }
+
+    /* Hide mobile cards on desktop */
+    .mobile-cards {
+      display: none;
+    }
+  }
+
+  /* Touch-friendly styles */
+  .touch-manipulation {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Smooth transitions for all interactive elements */
+  button, a, input, select, textarea {
+    transition: all 0.2s ease-in-out;
+  }
+
+  /* Active state for better touch feedback */
+  button:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  /* Loading spinner animation */
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .animate-spin {
+    animation: spin 1s linear infinite;
+  }
+
+  /* Stagger animation for lists */
+  @keyframes staggerIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .stagger-item {
+    animation: staggerIn 0.3s ease-out backwards;
+  }
+
+  .stagger-item:nth-child(1) { animation-delay: 0.05s; }
+  .stagger-item:nth-child(2) { animation-delay: 0.10s; }
+  .stagger-item:nth-child(3) { animation-delay: 0.15s; }
+  .stagger-item:nth-child(4) { animation-delay: 0.20s; }
+  .stagger-item:nth-child(5) { animation-delay: 0.25s; }
+
+  /* Better focus states for accessibility */
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+  }
+
+  /* Skeleton loader shimmer effect */
+  @keyframes shimmer {
+    0% {
+      background-position: -1000px 0;
+    }
+    100% {
+      background-position: 1000px 0;
+    }
+  }
+
+  .skeleton {
+    animation: shimmer 2s infinite linear;
+    background: linear-gradient(
+      to right,
+      #1e293b 0%,
+      #334155 20%,
+      #1e293b 40%,
+      #1e293b 100%
+    );
+    background-size: 1000px 100%;
+  }
+
+  /* Scale in animation for modals and dialogs */
+  .animate-scale-in {
+    animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes scaleIn {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
 }

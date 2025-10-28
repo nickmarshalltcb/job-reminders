@@ -50,6 +50,6 @@ coverage/
 setup-database.sql
 test-db-*.js
 
-# Codacy Instructions
-.codacy.instructions.md
-.github/instructions/codacy.instructions.md
+# Cursor extension auto-generated files
+.cursor/
+.github/instructions/

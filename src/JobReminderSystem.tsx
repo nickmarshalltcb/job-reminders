@@ -1,21 +1,19 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { 
-  FaCalendarAlt, 
-  FaBell, 
-  FaSearch, 
-  FaClock, 
-  FaCheckCircle, 
-  FaExclamationCircle, 
-  FaTrash, 
-  FaCog, 
-  FaLock, 
-  FaEye, 
-  FaEyeSlash, 
-  FaDownload, 
-  FaUpload, 
-  FaSort, 
-  FaSortUp, 
-  FaSortDown, 
+import {
+  FaCalendarAlt,
+  FaBell,
+  FaSearch,
+  FaClock,
+  FaCheckCircle,
+  FaExclamationCircle,
+  FaTrash,
+  FaCog,
+  FaLock,
+  FaEye,
+  FaEyeSlash,
+  FaSort,
+  FaSortUp,
+  FaSortDown,
   FaTimes,
   FaPlus,
   FaFilter,
@@ -29,17 +27,18 @@ import {
   FaRedo,
 } from 'react-icons/fa';
 import { supabase } from './supabaseClient';
-import { 
-  logEvent, 
-  logError, 
-  logSystemStartup, 
-  logAuthEvent, 
-  logJobOperation, 
-  logEmailOperation, 
-  logReminderOperation, 
-  logSystemError, 
-  logCriticalError 
+import {
+  logEvent,
+  logError,
+  logSystemStartup,
+  logAuthEvent,
+  logJobOperation,
+  logEmailOperation,
+  logReminderOperation,
+  logSystemError,
+  logCriticalError
 } from './utils/discordLogger.js';
+import { JobCard } from './components/JobCard';
 
 interface Job {
   id: number;
@@ -49,8 +48,10 @@ interface Job {
   productionDeadline: string;
   status: string;
   reminderSent: boolean;
-  snoozedUntil: string | null;
-  lastReminderDate: string | null;
+  snoozedUntil: string | null; // Legacy field (kept for backward compatibility)
+  snoozeExpiresAt: string | null; // New timestamp field for precise snooze handling
+  lastReminderDate: string | null; // Legacy field (kept for backward compatibility)
+  lastReminderSentAt: string | null; // New timestamp field for precise tracking
   createdAt: string;
 }
 
@@ -98,7 +99,20 @@ const JobReminderSystem = () => {
     fromEmail: '',
     fromPassword: ''
   });
-  
+
+  // Confirmation dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    variant: 'danger' | 'warning';
+  } | null>(null);
+
+  // Bulk selection state
+  const [selectedJobs, setSelectedJobs] = useState<Set<string>>(new Set());
+  const [bulkSelectMode, setBulkSelectMode] = useState(false);
+
   // Loading states for all async operations
   const [loadingStates, setLoadingStates] = useState({
     signIn: false,
@@ -114,7 +128,10 @@ const JobReminderSystem = () => {
     snoozeReminder: false,
     markAsComplete: false,
     exportData: false,
-    pasteJobs: false
+    pasteJobs: false,
+    bulkDelete: false,
+    bulkComplete: false,
+    bulkRemind: false
   });
 
   // Helper function to update loading states
@@ -172,12 +189,11 @@ const JobReminderSystem = () => {
     if (session && !startupLogged) {
       loadJobs();
       loadEmailConfig(); // Now async
-      checkReminders();
-      checkMissedReminders(); // Check for missed reminders on startup
+      // Note: Automated reminders are now handled 100% server-side via Netlify scheduled function
+      // The function auto-reminder-check.js runs every 5 minutes and sends reminders at 9:00 AM PKT
+      // No need for frontend time-based checking
       logSystemStartup(); // Log system startup only once
       setStartupLogged(true);
-      const interval = setInterval(checkReminders, 300000); // Check every 5 minutes
-      return () => clearInterval(interval);
     }
   }, [session, startupLogged]);
 
@@ -260,7 +276,9 @@ const JobReminderSystem = () => {
         status: job.status,
         reminderSent: job.reminder_sent,
         snoozedUntil: job.snoozed_until,
+        snoozeExpiresAt: job.snooze_expires_at,
         lastReminderDate: job.last_reminder_date,
+        lastReminderSentAt: job.last_reminder_sent_at,
         createdAt: job.created_at
       }));
 
@@ -492,61 +510,12 @@ const JobReminderSystem = () => {
     }
   };
 
+  // REMOVED: Frontend time-based reminder checking
+  // Reminders are now 100% server-side via auto-reminder-check.js
+  // This function is kept only for manual testing if needed
   const checkReminders = async () => {
-    try {
-      setLoading('checkReminders', true);
-      const pkTime = getPakistanTime();
-      const hour = pkTime.getHours();
-      const minute = pkTime.getMinutes();
-
-      // Check at 9:00 AM PKT (with some tolerance for timing issues)
-      if (hour === 9 && minute >= 0 && minute <= 4) {
-        const today = new Date(pkTime.toDateString());
-        today.setHours(0, 0, 0, 0);
-
-        // Group jobs by due date for bundling
-        const jobsByDate = new Map<string, Job[]>();
-
-        for (const job of jobs) {
-          if (job.status === 'Completed') continue;
-
-          // Parse deadline using Pakistan timezone
-          const deadlineDate = new Date(job.productionDeadline + 'T00:00:00+05:00');
-          deadlineDate.setHours(0, 0, 0, 0);
-          
-          const snoozedUntil = job.snoozedUntil ? new Date(job.snoozedUntil + 'T00:00:00+05:00') : null;
-          if (snoozedUntil) {
-            snoozedUntil.setHours(0, 0, 0, 0);
-          }
-
-          const shouldRemindFromSnooze = snoozedUntil && snoozedUntil.toDateString() === today.toDateString();
-          const isDeadlineToday = deadlineDate.toDateString() === today.toDateString() && !job.reminderSent;
-
-          if (shouldRemindFromSnooze || isDeadlineToday) {
-            const dateKey = shouldRemindFromSnooze ? snoozedUntil!.toDateString() : deadlineDate.toDateString();
-            
-            if (!jobsByDate.has(dateKey)) {
-              jobsByDate.set(dateKey, []);
-            }
-            jobsByDate.get(dateKey)!.push(job);
-          }
-        }
-
-        // Send bundled emails
-        for (const [dateKey, jobsForDate] of jobsByDate) {
-          if (jobsForDate.length > 0) {
-            await sendEmailReminder(jobsForDate);
-            await logReminderOperation('send scheduled reminders', { 
-              jobCount: jobsForDate.length,
-              dateKey,
-              jobNumbers: jobsForDate.map(j => j.jobNumber)
-            }, true);
-          }
-        }
-      }
-    } finally {
-      setLoading('checkReminders', false);
-    }
+    // No-op: All automated reminders are handled server-side
+    console.log('Note: Automated reminders are handled server-side at 9:00 AM PKT');
   };
 
   const checkMissedReminders = async () => {
@@ -714,7 +683,9 @@ const JobReminderSystem = () => {
         status: data[4].trim(),
         reminderSent: false,
         snoozedUntil: null,
+        snoozeExpiresAt: null,
         lastReminderDate: null,
+        lastReminderSentAt: null,
         createdAt: new Date().toISOString()
       });
     }
@@ -777,52 +748,200 @@ const JobReminderSystem = () => {
   };
 
   const deleteJob = async (jobNumber: string) => {
+    // Show confirmation dialog first
+    setConfirmDialog({
+      show: true,
+      title: 'Delete Job',
+      message: `Are you sure you want to delete job ${jobNumber}? This action cannot be undone.`,
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          setLoading('deleteJob', true);
+          const { error } = await supabase
+            .from('jobs')
+            .delete()
+            .eq('job_number', jobNumber);
+
+          if (error) throw error;
+
+          await loadJobs();
+          showAlert('Job deleted successfully', 'success');
+          await logJobOperation('delete', { jobNumber }, true);
+        } catch (error) {
+          console.error('Error deleting job:', error);
+          showAlert('Failed to delete job', 'error');
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          await logJobOperation('delete', { jobNumber, error: errorMessage }, false);
+        } finally {
+          setLoading('deleteJob', false);
+          setConfirmDialog(null);
+        }
+      }
+    });
+  };
+
+  // Bulk action functions
+  const toggleJobSelection = (jobNumber: string) => {
+    setSelectedJobs(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(jobNumber)) {
+        newSet.delete(jobNumber);
+      } else {
+        newSet.add(jobNumber);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedJobs.size === filteredJobs.length) {
+      setSelectedJobs(new Set());
+    } else {
+      setSelectedJobs(new Set(filteredJobs.map(job => job.jobNumber)));
+    }
+  };
+
+  const bulkDeleteJobs = async () => {
+    if (selectedJobs.size === 0) return;
+
+    setConfirmDialog({
+      show: true,
+      title: 'Bulk Delete Jobs',
+      message: `Are you sure you want to delete ${selectedJobs.size} job(s)? This action cannot be undone.`,
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          setLoading('bulkDelete', true);
+          const jobNumbers = Array.from(selectedJobs);
+
+          const { error } = await supabase
+            .from('jobs')
+            .delete()
+            .in('job_number', jobNumbers);
+
+          if (error) throw error;
+
+          await loadJobs();
+          showAlert(`Successfully deleted ${jobNumbers.length} job(s)`, 'success');
+          await logJobOperation('bulk_delete', { count: jobNumbers.length, jobNumbers }, true);
+
+          setSelectedJobs(new Set());
+          setBulkSelectMode(false);
+        } catch (error) {
+          console.error('Error bulk deleting jobs:', error);
+          showAlert('Failed to delete jobs', 'error');
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          await logJobOperation('bulk_delete', { count: selectedJobs.size, error: errorMessage }, false);
+        } finally {
+          setLoading('bulkDelete', false);
+          setConfirmDialog(null);
+        }
+      }
+    });
+  };
+
+  const bulkMarkAsComplete = async () => {
+    if (selectedJobs.size === 0) return;
+
     try {
-      setLoading('deleteJob', true);
+      setLoading('bulkComplete', true);
+      const jobNumbers = Array.from(selectedJobs);
+
       const { error } = await supabase
         .from('jobs')
-        .delete()
-        .eq('job_number', jobNumber);
+        .update({ status: 'Completed' })
+        .in('job_number', jobNumbers);
 
       if (error) throw error;
 
       await loadJobs();
-      showAlert('Job deleted successfully', 'success');
-      await logJobOperation('delete', { jobNumber }, true);
+      showAlert(`Successfully marked ${jobNumbers.length} job(s) as complete`, 'success');
+      await logJobOperation('bulk_complete', { count: jobNumbers.length, jobNumbers }, true);
+
+      setSelectedJobs(new Set());
+      setBulkSelectMode(false);
     } catch (error) {
-      console.error('Error deleting job:', error);
-      showAlert('Failed to delete job', 'error');
-      await logJobOperation('delete', { jobNumber, error: error.message }, false);
+      console.error('Error bulk completing jobs:', error);
+      showAlert('Failed to mark jobs as complete', 'error');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      await logJobOperation('bulk_complete', { count: selectedJobs.size, error: errorMessage }, false);
     } finally {
-      setLoading('deleteJob', false);
+      setLoading('bulkComplete', false);
     }
   };
 
-  const snoozeReminder = async (job: Job, days: number) => {
-    const pkTime = getPakistanTime();
-    const snoozeDate = new Date(pkTime);
-    snoozeDate.setDate(snoozeDate.getDate() + days);
-    snoozeDate.setHours(0, 0, 0, 0);
+  const bulkSendReminders = async () => {
+    if (selectedJobs.size === 0) return;
 
     try {
+      setLoading('bulkRemind', true);
+      const jobNumbers = Array.from(selectedJobs);
+      const jobsToRemind = jobs.filter(job => jobNumbers.includes(job.jobNumber));
+
+      await sendEmailReminder(jobsToRemind);
+
+      setSelectedJobs(new Set());
+      setBulkSelectMode(false);
+    } catch (error) {
+      console.error('Error bulk sending reminders:', error);
+      showAlert('Failed to send reminders', 'error');
+    } finally {
+      setLoading('bulkRemind', false);
+    }
+  };
+
+  const snoozeReminder = async (job: Job, hours: number) => {
+    try {
       setLoading('snoozeReminder', true);
+
+      // Calculate exact snooze expiry time
+      const now = new Date();
+      const snoozeExpiresAt = new Date(now.getTime() + (hours * 60 * 60 * 1000));
+
       const { error } = await supabase
         .from('jobs')
         .update({
-          snoozed_until: snoozeDate.toISOString(),
-          reminder_sent: false
+          snooze_expires_at: snoozeExpiresAt.toISOString(),
+          reminder_sent: false, // Reset reminder flag so it can be sent again
+          snoozed_until: null // Clear legacy field
         })
         .eq('job_number', job.jobNumber);
 
       if (error) throw error;
 
-      const dayText = days === 1 ? 'tomorrow' : days === 2 ? 'in 2 days' : `in ${days} days`;
-      showAlert(`Will remind you ${dayText} at 9 AM PKT`, 'success');
+      // Human-readable feedback
+      let timeText = '';
+      if (hours === 1) {
+        timeText = '1 hour';
+      } else if (hours === 4) {
+        timeText = '4 hours';
+      } else if (hours === 24) {
+        timeText = '24 hours (tomorrow at 9 AM PKT)';
+      } else if (hours === 48) {
+        timeText = '48 hours (day after tomorrow at 9 AM PKT)';
+      } else if (hours === 168) {
+        timeText = '1 week (next week at 9 AM PKT)';
+      } else {
+        timeText = `${hours} hours`;
+      }
+
+      showAlert(`Snoozed for ${timeText}`, 'success');
       setShowSnoozeMenu(null);
       await loadJobs();
+
+      await logReminderOperation('snooze', {
+        jobNumber: job.jobNumber,
+        clientName: job.clientName,
+        hours,
+        snoozeExpiresAt: snoozeExpiresAt.toISOString()
+      }, true);
     } catch (error) {
       console.error('Error snoozing reminder:', error);
       showAlert('Failed to snooze reminder', 'error');
+      await logReminderOperation('snooze', {
+        jobNumber: job.jobNumber,
+        error: error.message
+      }, false);
     } finally {
       setLoading('snoozeReminder', false);
     }
@@ -1201,39 +1320,40 @@ const JobReminderSystem = () => {
               </div>
             </div>
             
-            <div className="flex items-center gap-1 sm:gap-2">
-              <Tooltip content="Export all job data as JSON file" id="export-btn" position="bottom">
-              <button
-                onClick={exportData}
-                  className="p-2 sm:px-4 sm:py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center gap-2 text-sm font-medium border border-slate-700"
-              >
-                  <FaDownload className="w-4 h-4" />
-                <span className="hidden sm:inline">Export</span>
-              </button>
+            <div className="flex items-center gap-2">
+              <Tooltip content={bulkSelectMode ? "Exit bulk select mode" : "Select multiple jobs for bulk actions"} id="bulk-select-btn" position="bottom">
+                <button
+                  onClick={() => {
+                    setBulkSelectMode(!bulkSelectMode);
+                    if (bulkSelectMode) {
+                      setSelectedJobs(new Set());
+                    }
+                  }}
+                  className={`min-w-[44px] min-h-[44px] p-2 sm:px-4 sm:py-2 rounded-lg transition-all duration-200 flex items-center justify-center gap-2 text-sm font-medium border touch-manipulation ${
+                    bulkSelectMode
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white border-blue-500'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <FaCheckCircle className="w-4 h-4" />
+                  <span className="hidden sm:inline">{bulkSelectMode ? 'Exit Bulk' : 'Bulk Select'}</span>
+                </button>
               </Tooltip>
-              
-              <Tooltip content="Import job data from JSON file" id="import-btn" position="bottom">
-                <label className="p-2 sm:px-4 sm:py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center gap-2 text-sm font-medium cursor-pointer border border-slate-700">
-                  <FaUpload className="w-4 h-4" />
-                <span className="hidden sm:inline">Import</span>
-                <input type="file" accept=".json" onChange={importData} className="hidden" />
-              </label>
-              </Tooltip>
-              
+
               <Tooltip content="Configure email settings for reminders" id="settings-btn" position="bottom">
               <button
                 onClick={() => setShowSettings(!showSettings)}
-                  className="p-2 sm:px-4 sm:py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center gap-2 text-sm font-medium border border-slate-700"
+                className="min-w-[44px] min-h-[44px] p-2 sm:px-4 sm:py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all duration-200 flex items-center justify-center gap-2 text-sm font-medium border border-slate-700 touch-manipulation"
               >
                   <FaCog className="w-4 h-4" />
                 <span className="hidden sm:inline">Settings</span>
               </button>
               </Tooltip>
-              
+
               <Tooltip content="Sign out of your account" id="signout-btn" position="bottom">
               <button
                 onClick={handleSignOut}
-                  className="p-2 sm:px-4 sm:py-2 rounded-lg bg-red-900/50 hover:bg-red-900/70 text-red-300 transition-all duration-200 flex items-center gap-2 text-sm font-medium border border-red-800"
+                className="min-w-[44px] min-h-[44px] p-2 sm:px-4 sm:py-2 rounded-lg bg-red-900/50 hover:bg-red-900/70 text-red-300 transition-all duration-200 flex items-center justify-center gap-2 text-sm font-medium border border-red-800 touch-manipulation"
               >
                   <FaLock className="w-4 h-4" />
                 <span className="hidden sm:inline">Sign Out</span>
@@ -1281,7 +1401,7 @@ Example: SP-192	Stefan Nestorovic	15-Oct-2025	24-Oct-2025	In Production
 Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                   className="w-full h-32 sm:h-40 px-4 py-3 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 resize-none font-mono text-xs sm:text-sm"
                 />
-                <div className="absolute top-3 right-3 flex items-center gap-2 text-xs text-slate-500 bg-slate-800 px-3 py-1.5 rounded border border-slate-700">
+                <div className="hidden sm:flex absolute top-3 right-3 items-center gap-2 text-xs text-slate-500 bg-slate-800 px-3 py-1.5 rounded border border-slate-700">
                   <FaPlus className="w-3 h-3" />
                   <span>Ctrl+V to paste</span>
                 </div>
@@ -1412,12 +1532,178 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                   .mobile-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
                 }
               `}</style>
-        {/* Jobs Table */}
-        <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl overflow-visible">
+
+        {/* Mobile Cards View - Shown on screens < 768px */}
+        <div className="mobile-cards md:hidden space-y-3 mb-8">
+          {isLoading ? (
+            // Mobile skeleton loader
+            [...Array(3)].map((_, i) => (
+              <div key={i} className="bg-slate-800/50 border border-slate-700 rounded-lg p-4 animate-pulse">
+                <div className="h-6 bg-slate-700 rounded w-32 mb-2"></div>
+                <div className="h-4 bg-slate-700 rounded w-48 mb-4"></div>
+                <div className="space-y-2">
+                  <div className="h-3 bg-slate-700 rounded w-full"></div>
+                  <div className="h-3 bg-slate-700 rounded w-3/4"></div>
+                </div>
+              </div>
+            ))
+          ) : paginatedJobs.length === 0 ? (
+            <div className="text-center py-12 text-slate-400">
+              <FaCalendarAlt className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+              <p className="text-lg">No jobs found</p>
+              <p className="text-sm">Add your first job to get started</p>
+            </div>
+          ) : (
+            paginatedJobs.map((job) => (
+              <JobCard
+                key={job.id}
+                job={job}
+                onSendReminder={(job) => sendEmailReminder([job])}
+                onSnooze={snoozeReminder}
+                onComplete={markAsComplete}
+                onDelete={deleteJob}
+                loading={loadingStates}
+                calculateDaysRemaining={(deadline) => getDaysUntilDeadline(deadline, job.status) || 0}
+                formatDate={formatDate}
+                bulkSelectMode={bulkSelectMode}
+                isSelected={selectedJobs.has(job.jobNumber)}
+                onToggleSelection={toggleJobSelection}
+              />
+            ))
+          )}
+
+          {/* Mobile Pagination */}
+          {filteredJobs.length > itemsPerPage && (
+            <div className="bg-slate-900 rounded-xl border border-slate-800 mt-4 shadow-xl">
+              <div className="flex flex-col items-center gap-3 px-4 py-4">
+                <span className="text-xs text-slate-400">
+                  Showing {startIndex + 1} to {Math.min(endIndex, filteredJobs.length)} of {filteredJobs.length} jobs
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage(1)}
+                    disabled={currentPage === 1}
+                    className="px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 touch-manipulation"
+                  >
+                    ««
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                    disabled={currentPage === 1}
+                    className="px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 touch-manipulation"
+                  >
+                    Prev
+                  </button>
+                  <span className="px-4 py-2 rounded-lg text-sm font-bold bg-blue-600 text-white">
+                    {currentPage} / {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                    disabled={currentPage === totalPages}
+                    className="px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 touch-manipulation"
+                  >
+                    Next
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(totalPages)}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 touch-manipulation"
+                  >
+                    »»
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Bulk Actions Toolbar */}
+        {bulkSelectMode && selectedJobs.size > 0 && (
+          <div className="mb-4 bg-blue-950/30 border border-blue-800 rounded-xl p-4 shadow-xl animate-slide-down">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center">
+                  <FaCheckCircle className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-100">
+                    {selectedJobs.size} job{selectedJobs.size !== 1 ? 's' : ''} selected
+                  </p>
+                  <p className="text-xs text-slate-400">Choose an action to apply to selected jobs</p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={bulkSendReminders}
+                  disabled={loadingStates.bulkRemind}
+                  className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-all duration-200 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loadingStates.bulkRemind ? (
+                    <FaClock className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <FaBell className="w-4 h-4" />
+                  )}
+                  Send Reminders
+                </button>
+
+                <button
+                  onClick={bulkMarkAsComplete}
+                  disabled={loadingStates.bulkComplete}
+                  className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-all duration-200 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loadingStates.bulkComplete ? (
+                    <FaClock className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <FaCheckCircle className="w-4 h-4" />
+                  )}
+                  Mark Complete
+                </button>
+
+                <button
+                  onClick={bulkDeleteJobs}
+                  disabled={loadingStates.bulkDelete}
+                  className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-all duration-200 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loadingStates.bulkDelete ? (
+                    <FaClock className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <FaTrash className="w-4 h-4" />
+                  )}
+                  Delete
+                </button>
+
+                <button
+                  onClick={() => {
+                    setSelectedJobs(new Set());
+                    setBulkSelectMode(false);
+                  }}
+                  className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-medium transition-all duration-200 flex items-center gap-2"
+                >
+                  <FaTimes className="w-4 h-4" />
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Desktop Table - Shown on screens >= 768px */}
+        <div className="desktop-table hidden md:block bg-slate-900 rounded-xl border border-slate-800 shadow-xl overflow-visible">
           <div className="overflow-x-auto">
-            <table className="w-full mobile-table">
+            <table className="w-full">
               <thead className="bg-slate-800/50 border-b border-slate-700">
                 <tr>
+                  {bulkSelectMode && (
+                    <th className="px-4 py-4 text-left text-sm font-semibold text-slate-200">
+                      <input
+                        type="checkbox"
+                        checked={selectedJobs.size === filteredJobs.length && filteredJobs.length > 0}
+                        onChange={toggleSelectAll}
+                        className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 cursor-pointer"
+                      />
+                    </th>
+                  )}
                   <th
                     onClick={() => handleSort('jobNumber')}
                     className="px-6 py-4 text-left text-sm font-semibold cursor-pointer hover:bg-slate-700/50 transition-colors text-slate-200"
@@ -1536,6 +1822,16 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                         id={`job-${job.id}`}
                         className={`border-b border-slate-800 hover:bg-slate-800/50 transition-colors ${isCritical ? 'animate-pulse-red' : ''}`}
                       >
+                        {bulkSelectMode && (
+                          <td className="px-4 py-4">
+                            <input
+                              type="checkbox"
+                              checked={selectedJobs.has(job.jobNumber)}
+                              onChange={() => toggleJobSelection(job.jobNumber)}
+                              className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 cursor-pointer"
+                            />
+                          </td>
+                        )}
                         <td className="px-6 py-4">
                           <div className="mobile-table-label md:hidden">Job Number</div>
                           <span className="font-semibold text-blue-400">{job.jobNumber}</span>
@@ -1667,21 +1963,21 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                                   </div>
                                   <div className="py-2">
                                     {[
-                                      { days: 1, label: 'Tomorrow', color: 'bg-emerald-500', icon: FaClock },
-                                      { days: 2, label: 'In 2 days', color: 'bg-blue-500', icon: FaClock },
-                                      { days: 3, label: 'In 3 days', color: 'bg-yellow-500', icon: FaClock },
-                                      { days: 7, label: 'In 1 week', color: 'bg-orange-500', icon: FaCalendar },
-                                      { days: 14, label: 'In 2 weeks', color: 'bg-purple-500', icon: FaCalendar }
-                                    ].map(({ days, label, color, icon: Icon }) => (
+                                      { hours: 1, label: '1 Hour', color: 'bg-cyan-500', icon: FaClock, badge: '1h' },
+                                      { hours: 4, label: '4 Hours', color: 'bg-emerald-500', icon: FaClock, badge: '4h' },
+                                      { hours: 24, label: '24 Hours', color: 'bg-blue-500', icon: FaClock, badge: '1d' },
+                                      { hours: 48, label: '48 Hours', color: 'bg-yellow-500', icon: FaCalendar, badge: '2d' },
+                                      { hours: 168, label: '1 Week', color: 'bg-purple-500', icon: FaCalendar, badge: '7d' }
+                                    ].map(({ hours, label, color, icon: Icon, badge }) => (
                                       <button
-                                        key={days}
-                                        onClick={() => snoozeReminder(job, days)}
+                                        key={hours}
+                                        onClick={() => snoozeReminder(job, hours)}
                                         className="w-full px-4 py-3 text-left text-sm hover:bg-slate-700/70 transition-all flex items-center gap-3 group"
                                       >
                                         <div className={`w-2.5 h-2.5 rounded-full ${color} group-hover:scale-125 transition-transform shadow-lg`}></div>
                                         <Icon className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-300" />
                                         <span className="text-slate-200 font-medium flex-1">{label}</span>
-                                        <span className="text-xs text-slate-500 bg-slate-900 px-2 py-0.5 rounded">+{days}d</span>
+                                        <span className="text-xs text-slate-500 bg-slate-900 px-2 py-0.5 rounded">{badge}</span>
                                       </button>
                                     ))}
                                   </div>
@@ -1708,9 +2004,9 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
           </div>
         </div>
 
-        {/* Pagination */}
+        {/* Desktop Pagination - Hidden on mobile */}
         {filteredJobs.length > itemsPerPage && (
-          <div className="bg-slate-900 rounded-xl border border-slate-800 mt-6 shadow-xl">
+          <div className="hidden md:block bg-slate-900 rounded-xl border border-slate-800 mt-6 shadow-xl">
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 px-4 sm:px-6 py-4">
               <div className="flex items-center gap-2">
                 <span className="text-xs sm:text-sm text-slate-400">
@@ -2068,6 +2364,49 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
               </div>
               </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Dialog */}
+      {confirmDialog && confirmDialog.show && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 rounded-xl border border-slate-700 shadow-2xl max-w-md w-full animate-scale-in">
+            <div className={`px-6 py-4 border-b border-slate-700 flex items-center gap-3 ${
+              confirmDialog.variant === 'danger' ? 'bg-red-950/30' : 'bg-yellow-950/30'
+            }`}>
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                confirmDialog.variant === 'danger' ? 'bg-red-600' : 'bg-yellow-600'
+              }`}>
+                <FaExclamationCircle className="w-5 h-5 text-white" />
+              </div>
+              <h3 className="text-lg font-semibold text-slate-100">{confirmDialog.title}</h3>
+            </div>
+
+            <div className="px-6 py-6">
+              <p className="text-slate-300 leading-relaxed">{confirmDialog.message}</p>
+            </div>
+
+            <div className="px-6 py-4 bg-slate-800/50 rounded-b-xl flex gap-3 justify-end">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium transition-all duration-200 border border-slate-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  confirmDialog.onConfirm();
+                }}
+                className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
+                  confirmDialog.variant === 'danger'
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : 'bg-yellow-600 hover:bg-yellow-700 text-white'
+                }`}
+              >
+                {confirmDialog.variant === 'danger' ? 'Delete' : 'Confirm'}
+              </button>
             </div>
           </div>
         </div>
