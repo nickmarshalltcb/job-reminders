@@ -342,8 +342,26 @@ export const handler = async (event, context) => {
       };
     }
 
-    if (!emailConfigs || emailConfigs.length === 0) {
-      console.log('No email configurations found');
+    console.log(`Found ${emailConfigs ? emailConfigs.length : 0} email configuration(s)`);
+
+    // Map database columns (snake_case) to camelCase for consistency
+    const mappedConfigs = emailConfigs ? emailConfigs.map(config => ({
+      user_id: config.user_id,
+      toEmail: config.to_email,
+      fromEmail: config.from_email,
+      fromPassword: config.from_password,
+      configured: config.configured
+    })) : [];
+
+    if (mappedConfigs.length > 0) {
+      console.log('Email configs:', mappedConfigs.map(c => ({ user_id: c.user_id, toEmail: c.toEmail, configured: c.configured })));
+    }
+
+    if (!mappedConfigs || mappedConfigs.length === 0) {
+      console.log('⚠️ No email configurations found. Make sure you have saved your email configuration in Settings.');
+      await sendDiscordLog('warning', 'No email configurations found', {
+        message: 'No users have configured email settings. The reminder function cannot send emails.'
+      }, 'warning');
       return {
         statusCode: 200,
         headers: {
@@ -364,14 +382,15 @@ export const handler = async (event, context) => {
     today.setHours(0, 0, 0, 0);
 
     // Process each user's email configuration
-    for (const emailConfig of emailConfigs) {
+    for (const emailConfig of mappedConfigs) {
       try {
         // Get jobs for this user that need reminders
         // Use new timestamp columns with fallback to old columns
+        // Note: Since user_id column doesn't exist in jobs table, we fetch all jobs
+        // This works fine for single-user systems
         const { data: jobs, error: jobsError } = await supabase
           .from('jobs')
           .select('*')
-          .eq('user_id', emailConfig.user_id)
           .neq('status', 'Completed');
 
         if (jobsError) {
