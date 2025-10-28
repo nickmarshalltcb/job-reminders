@@ -1,6 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 import nodemailer from 'nodemailer';
 
+// Schedule: Run every 5 minutes
+export const schedule = "*/5 * * * *";
+
 // Discord webhook URL for logging
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
