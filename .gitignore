@@ -49,3 +49,7 @@ coverage/
 # Database setup files (should be run manually in Supabase)
 setup-database.sql
 test-db-*.js
+
+# Codacy Instructions
+.codacy.instructions.md
+.github/instructions/codacy.instructions.md
