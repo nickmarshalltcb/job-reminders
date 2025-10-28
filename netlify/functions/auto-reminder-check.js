@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
-import nodemailer from 'nodemailer';
+import pkg from 'nodemailer';
+const { createTransport } = pkg;
 
 // Schedule: Run every 5 minutes
 export const schedule = "*/5 * * * *";
@@ -140,7 +141,7 @@ const sendEmailReminder = async (jobs, emailConfig) => {
     const jobList = Array.isArray(jobs) ? jobs : [jobs];
 
     // Create transporter using Gmail
-    const transporter = nodemailer.createTransporter({
+    const transporter = createTransport({
       service: 'gmail',
       auth: {
         user: emailConfig.fromEmail,
