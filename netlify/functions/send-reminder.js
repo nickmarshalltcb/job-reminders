@@ -137,11 +137,12 @@ export const handler = async (event, context) => {
     };
   }
 
+  let jobList = []; // Define outside try block for error logging
   try {
     const { jobs, emailConfig, isBundled } = JSON.parse(event.body);
 
     // Handle both single job and bundled jobs
-    const jobList = Array.isArray(jobs) ? jobs : [jobs];
+    jobList = Array.isArray(jobs) ? jobs : [jobs];
 
     // Validate required data
     if (!jobList.length || !emailConfig) {

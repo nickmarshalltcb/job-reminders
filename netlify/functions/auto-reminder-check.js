@@ -164,13 +164,13 @@ const sendEmailReminder = async (jobs, emailConfig) => {
       let jobText = 'On Track';
     
       if (daysRemaining < 0) {
-        jobUrgency = 3;
+        jobUrgency = 2;
         jobColor = '#ef4444';
         jobText = 'OVERDUE';
-      } else if (daysRemaining === 0) {
-        jobUrgency = 2;
+      } else if (daysRemaining === 1) {
+        jobUrgency = 1;
         jobColor = '#f59e0b';
-        jobText = 'DUE TODAY';
+        jobText = 'DUE TOMORROW';
       } else if (daysRemaining <= 2) {
         jobUrgency = 1;
         jobColor = '#f59e0b';
@@ -253,8 +253,8 @@ const sendEmailReminder = async (jobs, emailConfig) => {
             <div class="stat-label">Total Jobs</div>
           </div>
           <div class="stat-item">
-            <div class="stat-number">${jobList.filter(j => j.daysRemaining === 0).length}</div>
-            <div class="stat-label">Due Today</div>
+            <div class="stat-number">${jobList.filter(j => j.daysRemaining === 1).length}</div>
+            <div class="stat-label">Due Tomorrow</div>
           </div>
           <div class="stat-item">
             <div class="stat-number">${jobList.filter(j => j.daysRemaining < 0).length}</div>
@@ -318,7 +318,7 @@ export const handler = async (event, context) => {
 
     // This function runs every 5 minutes and:
     // 1. Always checks for OVERDUE jobs and sends immediately
-    // 2. At 9:00 AM PKT, also sends reminders for jobs due TODAY
+    // 2. At 9:00 AM PKT, sends reminders for jobs due TOMORROW (1 day before deadline)
     console.log(`Reminder check running. Current time: ${currentHour}:${currentMinute} PKT. Is 9 AM: ${isNineAM}`);
 
     console.log('✅ 9:00 AM PKT - Processing reminders...');
@@ -426,8 +426,12 @@ export const handler = async (event, context) => {
           const deadlineDate = new Date(job.production_deadline + 'T00:00:00+05:00');
           deadlineDate.setHours(0, 0, 0, 0);
 
-          const isDeadlineToday = deadlineDate.getTime() === today.getTime();
           const isOverdue = deadlineDate < today;
+
+          // Calculate tomorrow's date for 1-day before check
+          const tomorrow = new Date(today);
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          const isDeadlineTomorrow = deadlineDate.getTime() === tomorrow.getTime();
 
           // OVERDUE jobs: Send immediately regardless of time
           if (isOverdue) {
@@ -449,8 +453,8 @@ export const handler = async (event, context) => {
             continue;
           }
 
-          // Jobs DUE TODAY: Only send at 9:00 AM PKT
-          if (isDeadlineToday && isNineAM) {
+          // Jobs DUE TOMORROW (1 day before deadline): Only send at 9:00 AM PKT
+          if (isDeadlineTomorrow && isNineAM) {
             // Check if reminder was already sent today
             if (job.last_reminder_sent_at) {
               const lastSentDate = new Date(job.last_reminder_sent_at);
@@ -464,8 +468,8 @@ export const handler = async (event, context) => {
               }
             }
 
-            console.log(`Job ${job.job_number} due today (deadline: ${job.production_deadline}) - sending at 9 AM`);
-            jobsNeedingReminders.push({ job, reason: 'due_today', sendImmediately: false });
+            console.log(`Job ${job.job_number} due tomorrow (deadline: ${job.production_deadline}) - sending 1 day before at 9 AM`);
+            jobsNeedingReminders.push({ job, reason: 'due_tomorrow', sendImmediately: false });
           }
         }
 

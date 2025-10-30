@@ -86,10 +86,18 @@ const JobReminderSystem = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
   const [hoveredElement, setHoveredElement] = useState<string | null>(null);
-  const [notification, setNotification] = useState<{ show: boolean; message: string; type: 'success' | 'error' | 'warning' }>({
+  const [notification, setNotification] = useState<{
+    show: boolean;
+    message: string;
+    type: 'success' | 'error' | 'warning';
+    undoAction?: () => void;
+    undoLabel?: string;
+  }>({
     show: false,
     message: '',
-    type: 'success'
+    type: 'success',
+    undoAction: undefined,
+    undoLabel: undefined
   });
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [isEmailConfigLoading, setIsEmailConfigLoading] = useState(false);
@@ -112,6 +120,19 @@ const JobReminderSystem = () => {
   // Bulk selection state
   const [selectedJobs, setSelectedJobs] = useState<Set<string>>(new Set());
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
+
+  // Paste preview state
+  const [pastePreview, setPastePreview] = useState<{
+    show: boolean;
+    jobs: Job[];
+    duplicates: Job[];
+    unique: Job[];
+  }>({
+    show: false,
+    jobs: [],
+    duplicates: [],
+    unique: []
+  });
 
   // Loading states for all async operations
   const [loadingStates, setLoadingStates] = useState({
@@ -701,7 +722,33 @@ const JobReminderSystem = () => {
       setLoading('pasteJobs', true);
       const parsedJobs = parseJobData(pastedText);
 
-      const dbJobs = parsedJobs.map(job => ({
+      // Check for duplicate job numbers
+      const existingJobNumbers = jobs.map(job => job.jobNumber);
+      const duplicateJobs = parsedJobs.filter(job => existingJobNumbers.includes(job.jobNumber));
+      const uniqueJobs = parsedJobs.filter(job => !existingJobNumbers.includes(job.jobNumber));
+
+      // Show preview modal
+      setPastePreview({
+        show: true,
+        jobs: parsedJobs,
+        duplicates: duplicateJobs,
+        unique: uniqueJobs
+      });
+
+    } catch (error) {
+      console.error('Error parsing jobs:', error);
+      showAlert(error.message, 'error');
+    } finally {
+      setLoading('pasteJobs', false);
+    }
+  };
+
+  const confirmPasteJobs = async () => {
+    try {
+      setLoading('pasteJobs', true);
+
+      // Only insert unique jobs
+      const dbJobs = pastePreview.unique.map(job => ({
         job_number: job.jobNumber,
         client_name: job.clientName,
         forwarding_date: job.forwardingDate,
@@ -709,15 +756,15 @@ const JobReminderSystem = () => {
         status: job.status,
         reminder_sent: false,
         snoozed_until: null,
-        last_reminder_date: null
+        last_reminder_date: null,
+        snooze_expires_at: null,
+        last_reminder_sent_at: null
       }));
 
-      // Check for duplicate job numbers before inserting
-      const existingJobNumbers = jobs.map(job => job.jobNumber);
-      const duplicateJobs = parsedJobs.filter(job => existingJobNumbers.includes(job.jobNumber));
-      
-      if (duplicateJobs.length > 0) {
-        throw new Error(`Duplicate job numbers found: ${duplicateJobs.map(j => j.jobNumber).join(', ')}. Please remove duplicates before adding.`);
+      if (dbJobs.length === 0) {
+        showAlert('No unique jobs to add', 'warning');
+        setPastePreview({ show: false, jobs: [], duplicates: [], unique: [] });
+        return;
       }
 
       const { error } = await supabase.from('jobs').insert(dbJobs);
@@ -725,8 +772,20 @@ const JobReminderSystem = () => {
 
       await loadJobs();
       setInputText('');
-      showAlert(`Successfully added ${parsedJobs.length} job(s)`, 'success');
-      await logJobOperation('bulk insert', { jobCount: parsedJobs.length, jobNumbers: parsedJobs.map(j => j.jobNumber) }, true);
+
+      const duplicateCount = pastePreview.duplicates.length;
+      const successMessage = duplicateCount > 0
+        ? `Added ${dbJobs.length} job(s). Skipped ${duplicateCount} duplicate(s).`
+        : `Successfully added ${dbJobs.length} job(s)`;
+
+      showAlert(successMessage, 'success');
+      await logJobOperation('bulk insert', {
+        jobCount: dbJobs.length,
+        duplicateCount,
+        jobNumbers: pastePreview.unique.map(j => j.jobNumber)
+      }, true);
+
+      setPastePreview({ show: false, jobs: [], duplicates: [], unique: [] });
     } catch (error) {
       console.error('Error adding jobs:', error);
       showAlert(error.message, 'error');
@@ -740,11 +799,16 @@ const JobReminderSystem = () => {
     setInputText(e.target.value);
   };
 
-  const showAlert = (message: string, type: 'success' | 'error' | 'warning') => {
-    setNotification({ show: true, message, type });
+  const showAlert = (
+    message: string,
+    type: 'success' | 'error' | 'warning',
+    undoAction?: () => void,
+    undoLabel: string = 'Undo'
+  ) => {
+    setNotification({ show: true, message, type, undoAction, undoLabel });
     setTimeout(() => {
-      setNotification(prev => ({ ...prev, show: false }));
-    }, 4000);
+      setNotification(prev => ({ ...prev, show: false, undoAction: undefined, undoLabel: undefined }));
+    }, 5000); // Extended to 5 seconds for undo actions
   };
 
   const deleteJob = async (jobNumber: string) => {
@@ -752,9 +816,19 @@ const JobReminderSystem = () => {
     setConfirmDialog({
       show: true,
       title: 'Delete Job',
-      message: `Are you sure you want to delete job ${jobNumber}? This action cannot be undone.`,
+      message: `Are you sure you want to delete job ${jobNumber}?`,
       variant: 'danger',
       onConfirm: async () => {
+        // Close dialog immediately for better UX
+        setConfirmDialog(null);
+
+        // Find and store the job data before deleting
+        const jobToDelete = jobs.find(j => j.jobNumber === jobNumber);
+        if (!jobToDelete) {
+          showAlert('Job not found', 'error');
+          return;
+        }
+
         try {
           setLoading('deleteJob', true);
           const { error } = await supabase
@@ -765,7 +839,39 @@ const JobReminderSystem = () => {
           if (error) throw error;
 
           await loadJobs();
-          showAlert('Job deleted successfully', 'success');
+
+          // Undo function to restore the deleted job
+          const undoDelete = async () => {
+            try {
+              const dbJob = {
+                job_number: jobToDelete.jobNumber,
+                client_name: jobToDelete.clientName,
+                forwarding_date: jobToDelete.forwardingDate,
+                production_deadline: jobToDelete.productionDeadline,
+                status: jobToDelete.status,
+                reminder_sent: jobToDelete.reminderSent,
+                snoozed_until: jobToDelete.snoozedUntil,
+                last_reminder_date: jobToDelete.lastReminderDate,
+                snooze_expires_at: jobToDelete.snoozeExpiresAt,
+                last_reminder_sent_at: jobToDelete.lastReminderSentAt
+              };
+
+              const { error: restoreError } = await supabase
+                .from('jobs')
+                .insert([dbJob]);
+
+              if (restoreError) throw restoreError;
+
+              await loadJobs();
+              showAlert('Job restored successfully', 'success');
+              await logJobOperation('undo delete', { jobNumber }, true);
+            } catch (undoError) {
+              console.error('Error restoring job:', undoError);
+              showAlert('Failed to restore job', 'error');
+            }
+          };
+
+          showAlert(`Job ${jobNumber} deleted`, 'success', undoDelete, 'Undo');
           await logJobOperation('delete', { jobNumber }, true);
         } catch (error) {
           console.error('Error deleting job:', error);
@@ -774,7 +880,6 @@ const JobReminderSystem = () => {
           await logJobOperation('delete', { jobNumber, error: errorMessage }, false);
         } finally {
           setLoading('deleteJob', false);
-          setConfirmDialog(null);
         }
       }
     });
@@ -807,12 +912,23 @@ const JobReminderSystem = () => {
     setConfirmDialog({
       show: true,
       title: 'Bulk Delete Jobs',
-      message: `Are you sure you want to delete ${selectedJobs.size} job(s)? This action cannot be undone.`,
+      message: `Are you sure you want to delete ${selectedJobs.size} job(s)?`,
       variant: 'danger',
       onConfirm: async () => {
+        // Close dialog immediately for better UX
+        setConfirmDialog(null);
+
+        // Find and store all job data before deleting
+        const jobNumbers = Array.from(selectedJobs);
+        const jobsToDelete = jobs.filter(j => jobNumbers.includes(j.jobNumber));
+
+        if (jobsToDelete.length === 0) {
+          showAlert('No jobs found to delete', 'error');
+          return;
+        }
+
         try {
           setLoading('bulkDelete', true);
-          const jobNumbers = Array.from(selectedJobs);
 
           const { error } = await supabase
             .from('jobs')
@@ -822,7 +938,39 @@ const JobReminderSystem = () => {
           if (error) throw error;
 
           await loadJobs();
-          showAlert(`Successfully deleted ${jobNumbers.length} job(s)`, 'success');
+
+          // Undo function to restore all deleted jobs
+          const undoBulkDelete = async () => {
+            try {
+              const dbJobs = jobsToDelete.map(job => ({
+                job_number: job.jobNumber,
+                client_name: job.clientName,
+                forwarding_date: job.forwardingDate,
+                production_deadline: job.productionDeadline,
+                status: job.status,
+                reminder_sent: job.reminderSent,
+                snoozed_until: job.snoozedUntil,
+                last_reminder_date: job.lastReminderDate,
+                snooze_expires_at: job.snoozeExpiresAt,
+                last_reminder_sent_at: job.lastReminderSentAt
+              }));
+
+              const { error: restoreError } = await supabase
+                .from('jobs')
+                .insert(dbJobs);
+
+              if (restoreError) throw restoreError;
+
+              await loadJobs();
+              showAlert(`Restored ${jobsToDelete.length} job(s)`, 'success');
+              await logJobOperation('undo bulk delete', { count: jobsToDelete.length, jobNumbers }, true);
+            } catch (undoError) {
+              console.error('Error restoring jobs:', undoError);
+              showAlert('Failed to restore jobs', 'error');
+            }
+          };
+
+          showAlert(`Deleted ${jobNumbers.length} job(s)`, 'success', undoBulkDelete, 'Undo');
           await logJobOperation('bulk_delete', { count: jobNumbers.length, jobNumbers }, true);
 
           setSelectedJobs(new Set());
@@ -834,7 +982,6 @@ const JobReminderSystem = () => {
           await logJobOperation('bulk_delete', { count: selectedJobs.size, error: errorMessage }, false);
         } finally {
           setLoading('bulkDelete', false);
-          setConfirmDialog(null);
         }
       }
     });
@@ -843,9 +990,13 @@ const JobReminderSystem = () => {
   const bulkMarkAsComplete = async () => {
     if (selectedJobs.size === 0) return;
 
+    // Store previous statuses before updating
+    const jobNumbers = Array.from(selectedJobs);
+    const jobsToComplete = jobs.filter(j => jobNumbers.includes(j.jobNumber));
+    const previousStatuses = new Map(jobsToComplete.map(j => [j.jobNumber, j.status]));
+
     try {
       setLoading('bulkComplete', true);
-      const jobNumbers = Array.from(selectedJobs);
 
       const { error } = await supabase
         .from('jobs')
@@ -855,7 +1006,30 @@ const JobReminderSystem = () => {
       if (error) throw error;
 
       await loadJobs();
-      showAlert(`Successfully marked ${jobNumbers.length} job(s) as complete`, 'success');
+
+      // Undo function to restore previous statuses
+      const undoBulkComplete = async () => {
+        try {
+          // Update each job back to its original status
+          for (const [jobNumber, previousStatus] of previousStatuses.entries()) {
+            const { error: undoError } = await supabase
+              .from('jobs')
+              .update({ status: previousStatus })
+              .eq('job_number', jobNumber);
+
+            if (undoError) throw undoError;
+          }
+
+          await loadJobs();
+          showAlert(`Restored ${previousStatuses.size} job(s) status`, 'success');
+          await logJobOperation('undo bulk complete', { count: previousStatuses.size, jobNumbers }, true);
+        } catch (undoError) {
+          console.error('Error restoring job statuses:', undoError);
+          showAlert('Failed to restore job statuses', 'error');
+        }
+      };
+
+      showAlert(`Marked ${jobNumbers.length} job(s) as complete`, 'success', undoBulkComplete, 'Undo');
       await logJobOperation('bulk_complete', { count: jobNumbers.length, jobNumbers }, true);
 
       setSelectedJobs(new Set());
@@ -948,6 +1122,8 @@ const JobReminderSystem = () => {
   };
 
   const markAsComplete = async (job: Job) => {
+    const previousStatus = job.status;
+
     try {
       setLoading('markAsComplete', true);
       const { error } = await supabase
@@ -957,8 +1133,28 @@ const JobReminderSystem = () => {
 
       if (error) throw error;
 
-      showAlert('Job marked as complete', 'success');
       await loadJobs();
+
+      // Undo function to revert the status change
+      const undoComplete = async () => {
+        try {
+          const { error: undoError } = await supabase
+            .from('jobs')
+            .update({ status: previousStatus })
+            .eq('job_number', job.jobNumber);
+
+          if (undoError) throw undoError;
+
+          await loadJobs();
+          showAlert('Job status restored', 'success');
+          await logJobOperation('undo complete', { jobNumber: job.jobNumber, restoredStatus: previousStatus }, true);
+        } catch (undoError) {
+          console.error('Error undoing completion:', undoError);
+          showAlert('Failed to undo completion', 'error');
+        }
+      };
+
+      showAlert(`Job ${job.jobNumber} marked as complete`, 'success', undoComplete, 'Undo');
       await logJobOperation('mark complete', { jobNumber: job.jobNumber, clientName: job.clientName }, true);
     } catch (error) {
       console.error('Error marking job complete:', error);
@@ -1393,14 +1589,23 @@ const JobReminderSystem = () => {
                   value={inputText}
                   onChange={handleInputChange}
                   onPaste={handlePaste}
+                  disabled={loadingStates.pasteJobs}
                   placeholder="Paste tab-separated job data here...
 
 Format: Job Number	Client Name	Forwarding Date	Production Deadline	Status
 Example: SP-192	Stefan Nestorovic	15-Oct-2025	24-Oct-2025	In Production
 
 Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
-                  className="w-full h-32 sm:h-40 px-4 py-3 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 resize-none font-mono text-xs sm:text-sm"
+                  className="w-full h-32 sm:h-40 px-4 py-3 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 resize-none font-mono text-xs sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 />
+                {loadingStates.pasteJobs && (
+                  <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm rounded-lg flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                      <p className="text-sm text-slate-300 font-medium">Processing data...</p>
+                    </div>
+                  </div>
+                )}
                 <div className="hidden sm:flex absolute top-3 right-3 items-center gap-2 text-xs text-slate-500 bg-slate-800 px-3 py-1.5 rounded border border-slate-700">
                   <FaPlus className="w-3 h-3" />
                   <span>Ctrl+V to paste</span>
@@ -2110,8 +2315,8 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
 
       {/* Toast Notification - Highest Z-Index */}
       {notification.show && (
-        <div 
-          className="fixed top-20 right-6 min-w-[320px] max-w-md px-5 py-4 rounded-xl shadow-2xl font-medium flex items-center gap-3 z-[9999] transform transition-all duration-300 ease-in-out animate-slide-in-right border-l-4"
+        <div
+          className="fixed top-20 right-6 min-w-[320px] max-w-md px-5 py-4 rounded-xl shadow-2xl font-medium z-[9999] transform transition-all duration-300 ease-in-out animate-slide-in-right border-l-4"
           style={{
             backgroundColor: notification.type === 'success' ? '#064e3b' :
               notification.type === 'error' ? '#7f1d1d' : '#78350f',
@@ -2124,31 +2329,46 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
             borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
           }}
         >
-          <div className="flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center"
-            style={{
-              backgroundColor: notification.type === 'success' ? '#065f46' :
-                notification.type === 'error' ? '#991b1b' : '#92400e'
-            }}
-          >
-            {notification.type === 'success' ? <FaCheckCircle className="w-5 h-5" /> : 
-              notification.type === 'error' ? <FaExclamationCircle className="w-5 h-5" /> :
-                <FaBell className="w-5 h-5" />}
+          <div className="flex items-center gap-3">
+            <div className="flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center"
+              style={{
+                backgroundColor: notification.type === 'success' ? '#065f46' :
+                  notification.type === 'error' ? '#991b1b' : '#92400e'
+              }}
+            >
+              {notification.type === 'success' ? <FaCheckCircle className="w-5 h-5" /> :
+                notification.type === 'error' ? <FaExclamationCircle className="w-5 h-5" /> :
+                  <FaBell className="w-5 h-5" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold mb-0.5">
+                {notification.type === 'success' ? 'Success' :
+                  notification.type === 'error' ? 'Error' : 'Notice'}
+              </p>
+              <p className="text-sm opacity-90 break-words">{notification.message}</p>
+            </div>
+            <button
+              onClick={() => setNotification(prev => ({ ...prev, show: false }))}
+              className="flex-shrink-0 ml-2 hover:opacity-75 transition-opacity p-2 rounded-lg hover:bg-white/10"
+            >
+              <FaTimes className="w-4 h-4" />
+            </button>
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold mb-0.5">
-              {notification.type === 'success' ? 'Success' :
-                notification.type === 'error' ? 'Error' : 'Notice'}
-            </p>
-            <p className="text-sm opacity-90 break-words">{notification.message}</p>
-          </div>
-          <button
-            onClick={() => setNotification(prev => ({ ...prev, show: false }))}
-            className="flex-shrink-0 ml-2 hover:opacity-75 transition-opacity p-2 rounded-lg hover:bg-white/10"
-          >
-            <FaTimes className="w-4 h-4" />
-          </button>
+          {notification.undoAction && (
+            <div className="mt-3 pt-3 border-t border-white/10">
+              <button
+                onClick={() => {
+                  notification.undoAction?.();
+                  setNotification(prev => ({ ...prev, show: false }));
+                }}
+                className="w-full px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors text-sm font-semibold"
+              >
+                {notification.undoLabel || 'Undo'}
+              </button>
+            </div>
+          )}
           {/* Progress bar */}
-          <div 
+          <div
             className="absolute bottom-0 left-0 h-1 rounded-bl-xl animate-progress-bar"
             style={{
               width: '100%',
@@ -2364,6 +2584,136 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
               </div>
               </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Paste Preview Modal */}
+      {pastePreview.show && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-slate-900 rounded-xl border border-slate-700 shadow-2xl max-w-4xl w-full my-8 animate-scale-in">
+            <div className="px-6 py-4 border-b border-slate-700 bg-blue-950/30">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-600">
+                    <FaCalendarAlt className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-100">Review Pasted Jobs</h3>
+                    <p className="text-sm text-slate-400">
+                      {pastePreview.unique.length} unique • {pastePreview.duplicates.length} duplicate{pastePreview.duplicates.length !== 1 ? 's' : ''}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setPastePreview({ show: false, jobs: [], duplicates: [], unique: [] })}
+                  className="p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors"
+                >
+                  <FaTimes className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 max-h-[60vh] overflow-y-auto">
+              {pastePreview.duplicates.length > 0 && (
+                <div className="mb-6">
+                  <div className="flex items-center gap-2 mb-3">
+                    <FaExclamationCircle className="w-4 h-4 text-yellow-500" />
+                    <h4 className="text-sm font-semibold text-yellow-500">
+                      Duplicate Jobs (Will be skipped)
+                    </h4>
+                  </div>
+                  <div className="space-y-2">
+                    {pastePreview.duplicates.map((job, index) => (
+                      <div key={index} className="bg-yellow-950/20 border border-yellow-900/50 rounded-lg p-3">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <p className="font-semibold text-yellow-500">{job.jobNumber}</p>
+                            <p className="text-sm text-slate-400">{job.clientName}</p>
+                            <p className="text-xs text-slate-500 mt-1">
+                              Deadline: {formatDate(job.productionDeadline)}
+                            </p>
+                          </div>
+                          <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-900/50 text-yellow-300">
+                            Already exists
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {pastePreview.unique.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <FaCheckCircle className="w-4 h-4 text-green-500" />
+                    <h4 className="text-sm font-semibold text-green-500">
+                      New Jobs (Will be added)
+                    </h4>
+                  </div>
+                  <div className="space-y-2">
+                    {pastePreview.unique.map((job, index) => (
+                      <div key={index} className="bg-slate-800 border border-slate-700 rounded-lg p-3">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <p className="font-semibold text-slate-100">{job.jobNumber}</p>
+                            <p className="text-sm text-slate-400">{job.clientName}</p>
+                            <div className="flex gap-4 mt-2 text-xs text-slate-500">
+                              <span>Forwarding: {formatDate(job.forwardingDate)}</span>
+                              <span>Deadline: {formatDate(job.productionDeadline)}</span>
+                            </div>
+                          </div>
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            job.status === 'Completed' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                            job.status === 'In Production' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                            job.status === 'Pending' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                            job.status === 'Delayed' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                            'bg-slate-500/20 text-slate-400 border border-slate-500/30'
+                          }`}>
+                            {job.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {pastePreview.unique.length === 0 && pastePreview.duplicates.length > 0 && (
+                <div className="text-center py-8">
+                  <FaExclamationCircle className="w-12 h-12 text-yellow-500 mx-auto mb-3" />
+                  <p className="text-slate-300 font-medium">All jobs are duplicates</p>
+                  <p className="text-sm text-slate-500 mt-1">No new jobs to add</p>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 bg-slate-800/50 rounded-b-xl flex gap-3 justify-end border-t border-slate-700">
+              <button
+                onClick={() => setPastePreview({ show: false, jobs: [], duplicates: [], unique: [] })}
+                className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium transition-all duration-200 border border-slate-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmPasteJobs}
+                disabled={pastePreview.unique.length === 0 || loadingStates.pasteJobs}
+                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {loadingStates.pasteJobs ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Adding...</span>
+                  </>
+                ) : (
+                  <>
+                    <FaPlus className="w-4 h-4" />
+                    <span>Add {pastePreview.unique.length} Job{pastePreview.unique.length !== 1 ? 's' : ''}</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

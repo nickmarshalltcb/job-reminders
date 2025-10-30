@@ -53,3 +53,4 @@ test-db-*.js
 # Cursor extension auto-generated files
 .cursor/
 .github/instructions/
+.github/instructions/codacy.instructions.md
