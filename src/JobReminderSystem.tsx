@@ -1121,6 +1121,40 @@ const JobReminderSystem = () => {
     }
   };
 
+  const cancelSnooze = async (job: Job) => {
+    try {
+      setLoading('snoozeReminder', true);
+
+      const { error } = await supabase
+        .from('jobs')
+        .update({
+          snooze_expires_at: null,
+          snoozed_until: null
+          // Don't reset reminder_sent - let the reminder logic handle it
+        })
+        .eq('job_number', job.jobNumber);
+
+      if (error) throw error;
+
+      showAlert('Snooze cancelled', 'success');
+      await loadJobs();
+
+      await logReminderOperation('cancel_snooze', {
+        jobNumber: job.jobNumber,
+        clientName: job.clientName
+      }, true);
+    } catch (error) {
+      console.error('Error cancelling snooze:', error);
+      showAlert('Failed to cancel snooze', 'error');
+      await logReminderOperation('cancel_snooze', {
+        jobNumber: job.jobNumber,
+        error: error.message
+      }, false);
+    } finally {
+      setLoading('snoozeReminder', false);
+    }
+  };
+
   const markAsComplete = async (job: Job) => {
     const previousStatus = job.status;
 
@@ -1765,6 +1799,7 @@ Supported date formats: DD-MMM-YYYY, DD/MM/YYYY, or YYYY-MM-DD"
                 job={job}
                 onSendReminder={(job) => sendEmailReminder([job])}
                 onSnooze={snoozeReminder}
+                onCancelSnooze={cancelSnooze}
                 onComplete={markAsComplete}
                 onDelete={deleteJob}
                 loading={loadingStates}

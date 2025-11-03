@@ -20,6 +20,7 @@ interface JobCardProps {
   job: Job;
   onSendReminder: (job: Job) => void;
   onSnooze: (job: Job, hours: number) => void;
+  onCancelSnooze?: (job: Job) => void;
   onComplete: (job: Job) => void;
   onDelete: (jobNumber: string) => void;
   loading: any;
@@ -34,6 +35,7 @@ export const JobCard: React.FC<JobCardProps> = ({
   job,
   onSendReminder,
   onSnooze,
+  onCancelSnooze,
   onComplete,
   onDelete,
   loading,
@@ -92,6 +94,39 @@ export const JobCard: React.FC<JobCardProps> = ({
           {urgencyText}
         </div>
       </div>
+
+      {/* Snooze Alert - Prominent indicator when job is snoozed */}
+      {job.snoozeExpiresAt && (
+        <div className="mb-3 bg-yellow-900/30 border border-yellow-600/50 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2">
+              <FaClock className="w-4 h-4 text-yellow-400" />
+              <span className="text-xs font-bold text-yellow-400 uppercase">Snoozed</span>
+            </div>
+            {onCancelSnooze && (
+              <button
+                onClick={() => onCancelSnooze(job)}
+                disabled={loading.snoozeReminder}
+                className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors disabled:opacity-50"
+              >
+                Cancel Snooze
+              </button>
+            )}
+          </div>
+          <div className="text-xs text-yellow-200">
+            Reminder snoozed until <span className="font-semibold">{new Date(job.snoozeExpiresAt).toLocaleString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true
+            })}</span>
+          </div>
+          <div className="text-xs text-yellow-300/70 mt-1">
+            This job is currently snoozed. Reminder will be sent automatically when snooze expires.
+          </div>
+        </div>
+      )}
 
       {/* Quick Info */}
       <div className="mb-3 space-y-1 text-sm">
@@ -176,10 +211,16 @@ export const JobCard: React.FC<JobCardProps> = ({
           <div className="relative">
           <button
             onClick={() => setShowSnoozeMenu(!showSnoozeMenu)}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-medium transition-all touch-manipulation min-h-[44px]"
+            disabled={!!job.snoozeExpiresAt}
+            className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium transition-all touch-manipulation min-h-[44px] ${
+              job.snoozeExpiresAt
+                ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                : 'bg-yellow-600 hover:bg-yellow-700 text-white'
+            }`}
+            title={job.snoozeExpiresAt ? 'Already snoozed - cancel snooze to set a new one' : 'Snooze this reminder'}
           >
             <FaClock className="w-4 h-4" />
-            <span className="text-sm">Snooze</span>
+            <span className="text-sm">{job.snoozeExpiresAt ? 'Snoozed' : 'Snooze'}</span>
           </button>
 
           {/* Snooze Menu */}

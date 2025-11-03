@@ -19,11 +19,23 @@
   to = "/index.html"
   status = 200
 
-# Note: Scheduled functions need to be configured in Netlify dashboard
-# Go to Site settings > Functions > Scheduled functions
-# Function: scheduled-reminders
-# Schedule: 0 4 * * * (Daily at 4:00 AM UTC / 9:00 AM PKT)
-
-# Auto reminder check - runs every 5 minutes
-# Function: auto-reminder-check
-# Schedule: */5 * * * * (Every 5 minutes)
+# REMINDER SYSTEM CONFIGURATION
+#
+# PRIMARY: auto-reminder-check (via GitHub Actions)
+# - Runs every 5 minutes via GitHub Actions workflow
+# - Sends "due tomorrow" reminders at 9:00 AM PKT
+# - Sends 2-day overdue reminders at 9:00 AM PKT
+# - Handles snooze expiry at any time
+#
+# DISABLED: scheduled-reminders.js.disabled
+# - Legacy daily scheduler (DISABLED to avoid conflicts)
+# - File renamed to .disabled to prevent deployment
+# - If you need to re-enable, remove .disabled extension and configure in Netlify dashboard
+#
+# RECOVERY: check-missed-reminders (manual/on-demand)
+# - Catches reminders that were missed due to system downtime
+# - Called manually from frontend or via API
+#
+# GitHub Actions Workflow: .github/workflows/scheduled-reminder.yml
+# - Triggers auto-reminder-check every 5 minutes
+# - More reliable than Netlify scheduled functions

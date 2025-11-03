@@ -154,17 +154,17 @@ const sendEmailReminder = async (jobs, emailConfig) => {
     let maxUrgency = 0; // 0: on track, 1: urgent, 2: due today, 3: overdue
     let urgencyColor = '#10b981'; // green
     let urgencyText = 'On Track';
-    
+
     const jobsWithUrgency = jobList.map(job => {
       const deadline = new Date(job.production_deadline);
       const daysRemaining = Math.ceil((deadline - today) / (1000 * 60 * 60 * 24));
-      
+
       let jobUrgency = 0;
       let jobColor = '#10b981';
       let jobText = 'On Track';
-    
+
       if (daysRemaining < 0) {
-        jobUrgency = 2;
+        jobUrgency = 3; // ✅ Fixed: Changed from 2 to 3 for OVERDUE
         jobColor = '#ef4444';
         jobText = 'OVERDUE';
       } else if (daysRemaining === 1) {
@@ -278,10 +278,19 @@ const sendEmailReminder = async (jobs, emailConfig) => {
           </div>
         `).join('')}
       </div>
+
+      <!-- Action Button -->
+      <div style="text-align: center; padding: 24px 0;">
+        <a href="https://jobs-reminder.netlify.app/${jobList.length === 1 ? `?job=${encodeURIComponent(jobList[0].job_number)}` : ''}"
+           style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; font-family: Arial, sans-serif;">
+          View in Dashboard
+        </a>
+      </div>
     </div>
-    
+
     <div class="footer">
       <p>This is an automated reminder from the Flycast Technologies Job Reminder System.</p>
+      ${jobList.length > 1 ? `<p style="margin-top: 8px; color: #9ca3af; font-size: 11px;">Viewing multiple jobs: Use filters in the dashboard to see specific jobs.</p>` : ''}
     </div>
   </div>
 </body>
@@ -317,11 +326,11 @@ export const handler = async (event, context) => {
     const isNineAM = currentHour === 9 && currentMinute <= 4;
 
     // This function runs every 5 minutes and:
-    // 1. Always checks for OVERDUE jobs and sends immediately
-    // 2. At 9:00 AM PKT, sends reminders for jobs due TOMORROW (1 day before deadline)
-    console.log(`Reminder check running. Current time: ${currentHour}:${currentMinute} PKT. Is 9 AM: ${isNineAM}`);
+    // 1. At 9:00 AM PKT, sends reminders for jobs due TOMORROW (1 day before deadline)
+    // 2. Always checks for jobs that are 2+ days OVERDUE and sends immediately
+    console.log(`⏰ Reminder check at ${currentHour}:${String(currentMinute).padStart(2, '0')} PKT (Is 9 AM window: ${isNineAM})`);
 
-    console.log('✅ 9:00 AM PKT - Processing reminders...');
+    console.log(`Processing reminders... (Current PKT time: ${currentHour}:${String(currentMinute).padStart(2, '0')})`);
     const now = new Date(); // Current UTC time
 
     // Get all users with email configurations
@@ -433,23 +442,41 @@ export const handler = async (event, context) => {
           tomorrow.setDate(tomorrow.getDate() + 1);
           const isDeadlineTomorrow = deadlineDate.getTime() === tomorrow.getTime();
 
-          // OVERDUE jobs: Send immediately regardless of time
+          // OVERDUE jobs: Recurring reminders at 2, 5, and 8 days overdue
           if (isOverdue) {
-            // Check if reminder was already sent today for overdue jobs
-            if (job.last_reminder_sent_at) {
-              const lastSentDate = new Date(job.last_reminder_sent_at);
-              const lastSentPKT = new Date(lastSentDate.toLocaleString('en-US', { timeZone: 'Asia/Karachi' }));
-              const lastSentDay = new Date(lastSentPKT.toDateString());
-              lastSentDay.setHours(0, 0, 0, 0);
+            // Calculate how many days overdue
+            const daysOverdue = Math.floor((today - deadlineDate) / (1000 * 60 * 60 * 24));
+            const overdueReminderCount = job.overdue_reminder_count || 0;
 
-              if (lastSentDay.getTime() === today.getTime()) {
-                console.log(`Skipping OVERDUE job ${job.job_number} - reminder already sent today at ${lastSentDate.toISOString()}`);
-                continue;
+            console.log(`Job ${job.job_number} is ${daysOverdue} day(s) overdue (deadline: ${job.production_deadline}), sent ${overdueReminderCount} overdue reminder(s)`);
+
+            // Reminder milestones: 2, 5, and 8 days overdue (max 3 reminders)
+            const milestones = [2, 5, 8];
+
+            // Check if we should send a reminder at this milestone
+            if (isNineAM && overdueReminderCount < milestones.length) {
+              const nextMilestone = milestones[overdueReminderCount];
+
+              if (daysOverdue >= nextMilestone) {
+                const reminderNumber = overdueReminderCount + 1;
+                console.log(`Job ${job.job_number} is ${daysOverdue} days overdue - sending overdue reminder #${reminderNumber} (milestone: ${nextMilestone} days)`);
+
+                jobsNeedingReminders.push({
+                  job,
+                  reason: `overdue_reminder_${reminderNumber}`,
+                  sendImmediately: true,
+                  daysOverdue,
+                  reminderNumber,
+                  milestone: nextMilestone
+                });
+              } else {
+                console.log(`Job ${job.job_number} is ${daysOverdue} days overdue - waiting for ${nextMilestone} days before next reminder`);
               }
+            } else if (overdueReminderCount >= milestones.length) {
+              console.log(`Job ${job.job_number} - max overdue reminders reached (${overdueReminderCount}/${milestones.length}), no more reminders will be sent`);
+            } else if (!isNineAM) {
+              console.log(`Job ${job.job_number} is ${daysOverdue} days overdue - waiting for 9 AM PKT to send reminder`);
             }
-
-            console.log(`Job ${job.job_number} is OVERDUE (deadline: ${job.production_deadline}) - sending immediately`);
-            jobsNeedingReminders.push({ job, reason: 'overdue', sendImmediately: true });
             continue;
           }
 
@@ -487,38 +514,52 @@ export const handler = async (event, context) => {
 
           if (emailSent) {
             // Mark jobs as reminder sent with current timestamp
-            const jobIds = jobsToSend.map(job => job.id);
-            const { error: updateError } = await supabase
-              .from('jobs')
-              .update({
+            // Handle overdue vs due_tomorrow reminders differently
+            for (const item of jobsNeedingReminders) {
+              const updateData = {
                 reminder_sent: true,
                 last_reminder_sent_at: now.toISOString(),
                 last_reminder_date: now.toISOString().split('T')[0], // Keep for backward compatibility
                 snooze_expires_at: null, // Clear snooze since reminder was sent
                 snoozed_until: null // Clear legacy snooze field
-              })
-              .in('id', jobIds);
+              };
 
-            if (updateError) {
-              console.error('Error updating reminder status:', updateError);
-              await sendDiscordLog('error', 'Failed to update reminder status', {
-                error: updateError.message,
-                jobIds
-              }, 'error');
-            } else {
-              totalRemindersSent += jobsToSend.length;
-              console.log(`✅ Sent reminder for ${jobsToSend.length} jobs`);
+              // If this was an overdue reminder, increment the counter
+              if (item.reason && item.reason.startsWith('overdue_reminder_')) {
+                const currentCount = item.job.overdue_reminder_count || 0;
+                updateData.overdue_reminder_count = currentCount + 1;
+                updateData.overdue_reminder_sent = true; // Keep for backward compatibility
 
-              await sendDiscordLog('event', 'Reminder sent successfully', {
-                userId: emailConfig.user_id,
-                userEmail: emailConfig.toEmail,
-                jobCount: jobsToSend.length,
-                immediateCount: immediateJobs.length,
-                scheduledCount: scheduledJobs.length,
-                jobNumbers: jobsToSend.map(j => j.job_number).join(', '),
-                reasons: jobsNeedingReminders.map(item => `${item.job.job_number}:${item.reason}`).join(', ')
-              }, 'info');
+                console.log(`Incrementing overdue reminder count for ${item.job.job_number}: ${currentCount} → ${currentCount + 1}`);
+              }
+
+              const { error: updateError } = await supabase
+                .from('jobs')
+                .update(updateData)
+                .eq('id', item.job.id);
+
+              if (updateError) {
+                console.error(`Error updating job ${item.job.job_number}:`, updateError);
+                await sendDiscordLog('error', 'Failed to update reminder status for job', {
+                  error: updateError.message,
+                  jobNumber: item.job.job_number
+                }, 'error');
+              }
             }
+
+            // Success - all jobs updated
+            totalRemindersSent += jobsToSend.length;
+            console.log(`✅ Sent reminder for ${jobsToSend.length} jobs`);
+
+            await sendDiscordLog('event', 'Reminder sent successfully', {
+              userId: emailConfig.user_id,
+              userEmail: emailConfig.toEmail,
+              jobCount: jobsToSend.length,
+              immediateCount: immediateJobs.length,
+              scheduledCount: scheduledJobs.length,
+              jobNumbers: jobsToSend.map(j => j.job_number).join(', '),
+              reasons: jobsNeedingReminders.map(item => `${item.job.job_number}:${item.reason}`).join(', ')
+            }, 'info');
           } else {
             await sendDiscordLog('error', 'Failed to send reminder email', {
               userId: emailConfig.user_id,
