@@ -126,11 +126,27 @@ const sendDiscordLog = async (type, message, data = {}, level = 'info') => {
 };
 
 /**
- * Get Pakistan time
+ * Get current hour and minute in Pakistan timezone (UTC+5)
+ */
+const getPakistanTimeComponents = () => {
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Karachi',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false
+  });
+  const parts = formatter.formatToParts(now);
+  const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
+  const minute = parseInt(parts.find(p => p.type === 'minute')?.value || '0');
+  return { hour, minute, date: now };
+};
+
+/**
+ * Get Pakistan time as Date object (for display only)
  */
 const getPakistanTime = () => {
-  const now = new Date();
-  return new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Karachi' }));
+  return new Date(); // Return current UTC date
 };
 
 /**
@@ -318,9 +334,9 @@ export const handler = async (event, context) => {
   try {
     console.log('Auto reminder check started');
 
-    const pkTime = getPakistanTime();
-    const currentHour = pkTime.getHours();
-    const currentMinute = pkTime.getMinutes();
+    const pktTime = getPakistanTimeComponents();
+    const currentHour = pktTime.hour;
+    const currentMinute = pktTime.minute;
 
     // Check if it's 9:00 AM PKT (with 5-minute tolerance)
     const isNineAM = currentHour === 9 && currentMinute <= 4;
@@ -388,7 +404,7 @@ export const handler = async (event, context) => {
 
     let totalRemindersSent = 0;
     let totalUsersProcessed = 0;
-    const today = new Date(pkTime.toDateString());
+    const today = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Karachi' }).split(',')[0]);
     today.setHours(0, 0, 0, 0);
 
     // Process each user's email configuration
@@ -580,7 +596,7 @@ export const handler = async (event, context) => {
       totalUsersProcessed,
       totalRemindersSent,
       timestamp: now.toISOString(),
-      pktTime: pkTime.toLocaleString('en-US', { timeZone: 'Asia/Karachi' })
+      pktTime: `${currentHour}:${String(currentMinute).padStart(2, '0')} (${now.toLocaleString('en-US', { timeZone: 'Asia/Karachi' })})`
     }, totalRemindersSent > 0 ? 'info' : 'warning');
 
     return {
@@ -591,10 +607,10 @@ export const handler = async (event, context) => {
       },
       body: JSON.stringify({
         success: true,
-        message: 'Auto reminder check completed at 9:00 AM PKT',
+        message: 'Auto reminder check completed',
         totalUsersProcessed,
         totalRemindersSent,
-        pktTime: pkTime.toLocaleString('en-US', { timeZone: 'Asia/Karachi' })
+        pktTime: `${currentHour}:${String(currentMinute).padStart(2, '0')} PKT`
       })
     };
 
